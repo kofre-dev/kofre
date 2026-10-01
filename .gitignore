@@ -1,0 +1,24 @@
+# Executáveis e binários compilados
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Dados do cofre, segredos e backups
+vault.enc
+*.enc
+*.key
+*.bak
+*.old
+
+# Configurações com segredos locais
+.env
+.env.*
+config.json
+
+# Pastas temporárias e de build
+tmp/
+dist/
+build/
+.railway/
