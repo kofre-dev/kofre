@@ -22,7 +22,13 @@ irm https://kofre.dev/install.ps1 | iex
 curl -fsSL https://kofre.dev/install.sh | bash
 ```
 
-### Via Go
+### Download Direto dos Binários Compilados
+Você também pode baixar os executáveis prontos diretamente na aba de **[GitHub Releases](https://github.com/kofre-dev/kofre/releases)**:
+- `kofre-windows-amd64.exe` (Windows x64)
+- `kofre-linux-amd64` / `kofre-linux-arm64` (Linux)
+- `kofre-darwin-amd64` / `kofre-darwin-arm64` (macOS Intel / Apple Silicon)
+
+### Via Go Toolchain
 ```bash
 go install github.com/kofre-dev/kofre/cmd/kofre@latest
 ```
