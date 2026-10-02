@@ -1466,27 +1466,34 @@ func (m Model) viewUnlock() string {
 	var b strings.Builder
 
 	if isProPlan() {
-		b.WriteString(badgeToken.Render("★ KOFRE CLOUD PRO ATIVO (Zero-Knowledge E2EE)") + "\n\n")
+		b.WriteString(badgeToken.Render("★ KOFRE CLOUD PRO ATIVO (Zero-Knowledge E2EE)"))
+		b.WriteString("\n\n")
 	} else {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("★ Plano FREE (Offline / Local) • Pressione [Ctrl+P] para ativar Plano Cloud Pro") + "\n\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("★ Plano FREE (Offline / Local) • Pressione [Ctrl+P] para ativar Plano Cloud Pro"))
+		b.WriteString("\n\n")
 	}
 
 	if m.isNewVault {
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("★ Inicializacao de Novo Cofre\n"))
+		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("★ Inicializacao de Novo Cofre"))
+		b.WriteString("\n")
 		b.WriteString("Defina seu PIN ou senha mestre. Essa chave gerara a criptografia AES-256 do cofre.\n\n")
 	} else {
-		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Cofre Criptografado Encontrado\n"))
+		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Cofre Criptografado Encontrado"))
+		b.WriteString("\n")
 		if mycrypto.HasTelegramUnlockEnvelope() {
 			b.WriteString("Insira sua senha mestre ou pressione ")
 			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true).Render("[Ctrl+T]"))
 			b.WriteString(" para entrar direto pelo Telegram sem senha:\n\n")
 		} else {
 			b.WriteString("Insira sua chave de acesso para carregar os segredos na memoria RAM:\n")
-			b.WriteString(dimStyle.Render("(Ao entrar com a senha uma primeira vez, o desbloqueio rápido por Telegram será ativado)\n\n"))
+			b.WriteString(dimStyle.Render("(Ao entrar com a senha uma primeira vez, o desbloqueio rápido por Telegram será ativado)"))
+			b.WriteString("\n\n")
 		}
 	}
 
-	b.WriteString(m.passInput.View() + "\n\n")
+	b.WriteString(m.passInput.View())
+	b.WriteString("\n\n")
+
 	if mycrypto.HasTelegramUnlockEnvelope() {
 		b.WriteString(helpStyle.Render("[Enter] Confirmar Senha  •  [Ctrl+T] Desbloquear Direto pelo Telegram  •  [Esc] Sair"))
 	} else {
@@ -1503,7 +1510,8 @@ func (m Model) viewTelegramChallenge() string {
 	secs := m.challengeSeconds % 60
 	timeStr := fmt.Sprintf("%02d:%02d", mins, secs)
 
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("📱 Autenticação / Recuperação via Telegram\n"))
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("📱 Autenticação / Recuperação via Telegram"))
+	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("Enviamos uma solicitação para o seu bot @%s no Telegram.\n\n", config.GetTelegramBot()))
 	b.WriteString("Opção 1: Toque em ")
 	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("[ ✅ Autorizar Desbloqueio ]"))
