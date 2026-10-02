@@ -39,7 +39,7 @@ O formato CSV é ideal para importar grandes volumes de credenciais a partir do 
 ### Exemplo `senhas.csv`:
 ```csv
 Title,Category,Username,Password,URL,Notes
-GitHub Deploy,token,solivansoft,ghp_exemploTokenSecreto12345,https://github.com,Token de deploy CI/CD
+GitHub Deploy,token,dev_deploy,ghp_exemploTokenSecreto12345,https://github.com,Token de deploy CI/CD
 AWS Producao,password,admin_root,SenhaForte#2026,https://aws.amazon.com,Conta principal da empresa
 Banco Inter PJ,password,financeiro@empresa.com,MinhaSenha!99,,Chave PIX e conta corrente
 Servidor Linux Bastion,ssh_key,ubuntu,"-----BEGIN OPENSSH PRIVATE KEY-----

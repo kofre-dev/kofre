@@ -80,7 +80,7 @@ contato suporte: suporte@provedor.com`
 
 func TestParseCSV(t *testing.T) {
 	csvContent := `Title,Category,Username,Password,URL,Notes
-GitHub Deploy,token,solivan,ghp_superSecretToken123456789012,https://github.com,Deploy token
+GitHub Deploy,token,developer_deploy,ghp_superSecretToken123456789012,https://github.com,Deploy token
 AWS Root,password,root_admin,SuperSecretPass#999,https://aws.amazon.com,Conta principal
 Banco Inter,password,empresa@gmail.com,SenhaInter123,,PIX cadastrado`
 
