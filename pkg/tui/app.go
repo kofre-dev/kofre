@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,6 +37,7 @@ const (
 	ViewForm
 	ViewConfirmDelete
 	ViewPro
+	ViewChangePassword
 )
 
 type Model struct {
@@ -89,6 +91,11 @@ type Model struct {
 	// Confirmacao de Delete
 	deleteID    string
 	deleteTitle string
+
+	// Alterar Senha Mestre
+	newPassInput     input
+	confirmPassInput input
+	changePassFocus  int
 
 	width  int
 	height int
@@ -220,6 +227,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirmDelete(msg)
 		case ViewPro:
 			return m.updatePro(msg)
+		case ViewChangePassword:
+			return m.updateChangePassword(msg)
 		}
 
 	case challengeTickMsg:
@@ -971,6 +980,11 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.previousState = m.state
 		m.state = ViewPro
 		return m, nil
+
+	case "m", "M":
+		m.initChangePasswordForm()
+		m.state = ViewChangePassword
+		return m, textinput.Blink
 	}
 
 	return m, nil
@@ -1432,6 +1446,8 @@ func (m Model) View() string {
 		s.WriteString(m.viewConfirmDelete())
 	case ViewPro:
 		s.WriteString(m.viewPro())
+	case ViewChangePassword:
+		s.WriteString(m.viewChangePassword())
 	}
 
 	return s.String()
@@ -1731,3 +1747,181 @@ func (m Model) viewPro() string {
 
 	return boxStyle.Render(b.String())
 }
+
+// ======================== TELA ALTERAR SENHA MESTRE ========================
+
+func (m *Model) initChangePasswordForm() {
+	p1 := newInput(true)
+	p1.Placeholder = "Digite a nova senha mestre (mínimo 6 caracteres)"
+	p1.EchoMode = textinput.EchoPassword
+	p1.EchoCharacter = '•'
+	p1.Focus()
+
+	p2 := newInput(true)
+	p2.Placeholder = "Confirme a nova senha mestre"
+	p2.EchoMode = textinput.EchoPassword
+	p2.EchoCharacter = '•'
+	p2.Blur()
+
+	m.newPassInput = p1
+	m.confirmPassInput = p2
+	m.changePassFocus = 0
+	m.err = nil
+}
+
+func (m Model) updateChangePassword(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.newPassInput.Reset()
+		m.confirmPassInput.Reset()
+		m.state = ViewList
+		m.err = nil
+		return m, nil
+
+	case tea.KeyTab, tea.KeyDown:
+		m.changePassFocus = (m.changePassFocus + 1) % 2
+		if m.changePassFocus == 0 {
+			m.newPassInput.Focus()
+			m.confirmPassInput.Blur()
+		} else {
+			m.newPassInput.Blur()
+			m.confirmPassInput.Focus()
+		}
+		return m, nil
+
+	case tea.KeyShiftTab, tea.KeyUp:
+		m.changePassFocus = (m.changePassFocus - 1 + 2) % 2
+		if m.changePassFocus == 0 {
+			m.newPassInput.Focus()
+			m.confirmPassInput.Blur()
+		} else {
+			m.newPassInput.Blur()
+			m.confirmPassInput.Focus()
+		}
+		return m, nil
+
+	case tea.KeyEnter:
+		if m.changePassFocus == 0 {
+			m.changePassFocus = 1
+			m.newPassInput.Blur()
+			m.confirmPassInput.Focus()
+			return m, nil
+		}
+
+		p1 := m.newPassInput.Bytes()
+		p2 := m.confirmPassInput.Bytes()
+		defer mycrypto.ZeroBytes(p1)
+		defer mycrypto.ZeroBytes(p2)
+
+		if len(p1) < 6 {
+			m.err = fmt.Errorf("a nova senha deve ter no mínimo 6 caracteres")
+			return m, nil
+		}
+
+		if string(p1) != string(p2) {
+			m.err = fmt.Errorf("as senhas digitadas não coincidem")
+			return m, nil
+		}
+
+		if err := m.changePassword(p1); err != nil {
+			m.err = err
+			return m, nil
+		}
+
+		m.newPassInput.Reset()
+		m.confirmPassInput.Reset()
+		m.state = ViewList
+		m.err = nil
+		return m, m.notify("✓ Senha mestre alterada com sucesso! Cofre recriptografado com novo salt.")
+	}
+
+	var cmd tea.Cmd
+	if m.changePassFocus == 0 {
+		m.newPassInput, cmd = m.newPassInput.Update(msg)
+	} else {
+		m.confirmPassInput, cmd = m.confirmPassInput.Update(msg)
+	}
+	return m, cmd
+}
+
+func (m *Model) changePassword(newPass []byte) error {
+	if len(newPass) == 0 {
+		return errors.New("a nova senha não pode ser vazia")
+	}
+
+	newKey, newSalt, err := mycrypto.DeriveKeyBytes(newPass, nil)
+	if err != nil {
+		return fmt.Errorf("falha na derivação da chave: %w", err)
+	}
+	defer mycrypto.ZeroBytes(newKey)
+
+	// Re-criptografa o cofre com a nova chave e novo salt
+	packed, err := m.vault.Pack(newKey, newSalt)
+	if err != nil {
+		return fmt.Errorf("falha ao recriptografar cofre: %w", err)
+	}
+
+	// Salva na persistência ativa (disco / cloud / sync)
+	ctx := context.Background()
+	if err := m.storage.Save(ctx, packed); err != nil {
+		return fmt.Errorf("falha ao salvar cofre: %w", err)
+	}
+
+	// Atualiza chaves na sessão da memória RAM
+	newSealedKey, err := mycrypto.SealMemory(newKey)
+	if err != nil {
+		return fmt.Errorf("falha ao proteger nova chave na memória: %w", err)
+	}
+
+	if m.sessionKey != nil {
+		m.sessionKey.Close()
+	}
+	m.sessionKey = newSealedKey
+	m.salt = newSalt
+	m.vault.MarkClean()
+
+	// Se o Telegram Split-Key estiver ativo, atualiza o envelope com a nova chave
+	if cfg, _ := config.LoadConfig(); cfg != nil && cfg.CloudEnabled && cfg.KofreToken != "" {
+		if mycrypto.HasTelegramUnlockEnvelope() {
+			keyCopy := append([]byte(nil), newKey...)
+			go func(k []byte, tok, ep string) {
+				defer mycrypto.ZeroBytes(k)
+				_ = mycrypto.SaveTelegramUnlockEnvelope(k, tok, ep)
+			}(keyCopy, cfg.KofreToken, config.GetCloudEndpoint())
+		}
+	}
+
+	return nil
+}
+
+func (m Model) viewChangePassword() string {
+	var b strings.Builder
+
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("🔑 Alterar Senha Mestre do Cofre"))
+	b.WriteString("\n")
+	b.WriteString("Ao confirmar, todos os segredos serão recriptografados com a nova chave e um novo salt aleatório.")
+	b.WriteString("\n\n")
+
+	label1 := "Nova Senha Mestre:"
+	if m.changePassFocus == 0 {
+		label1 = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("▸ Nova Senha Mestre:")
+	}
+	b.WriteString(label1)
+	b.WriteString("\n")
+	b.WriteString(m.newPassInput.View())
+	b.WriteString("\n\n")
+
+	label2 := "Confirmar Nova Senha:"
+	if m.changePassFocus == 1 {
+		label2 = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("▸ Confirmar Nova Senha:")
+	}
+	b.WriteString(label2)
+	b.WriteString("\n")
+	b.WriteString(m.confirmPassInput.View())
+	b.WriteString("\n\n")
+
+	b.WriteString(helpStyle.Render("[Enter] Salvar Nova Senha  •  [Tab] Alternar Campo  •  [Esc] Cancelar"))
+
+	return boxStyle.Render(b.String())
+}
+

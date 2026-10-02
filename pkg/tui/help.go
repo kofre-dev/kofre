@@ -51,7 +51,7 @@ func wrapHelp(items []string, width int) string {
 func (m Model) listFooter() string {
 	return helpStyle.Render(wrapHelp([]string{
 		"↑↓ Navegar", "Enter Abrir", "c Copiar", "/ Buscar",
-		"n Novo", "Ctrl+L Bloquear", "F1 Ajuda", "q Sair",
+		"n Novo", "m Mudar Senha", "Ctrl+L Bloquear", "F1 Ajuda", "q Sair",
 	}, m.helpWidth()))
 }
 
@@ -67,6 +67,7 @@ func (m Model) helpLines() []string {
 		"/: buscar; Esc: sair da busca",
 		"n: nova credencial",
 		"d: excluir credencial",
+		"m: alterar senha mestre do cofre (recriptografia)",
 		"Tab/Shift+Tab: mudar categoria",
 		"p: plano e status Pro",
 		"Ctrl+L: bloquear o cofre",
