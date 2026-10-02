@@ -1141,26 +1141,27 @@ func (m Model) View() string {
 }
 
 func (m Model) renderHeader() string {
-	totalCount := 0
-	if m.vault != nil {
-		totalCount = m.vault.Count()
-	}
+	isUnlocked := m.state != ViewUnlock && m.state != ViewTelegramChallenge && m.state != ViewPro
 
 	lockText := "🔒 TRANCADO"
-	if m.state != ViewUnlock && m.state != ViewTelegramChallenge && m.state != ViewPro {
+	if isUnlocked {
 		lockText = "🔓 DESBLOQUEADO (RAM)"
 	}
 
 	title := titleStyle.Render(" Kofre ")
 	status := statusBadgeStyle.Render(lockText)
-	countBadge := badgeSSH.Render(fmt.Sprintf("%d segredos", totalCount))
 
 	planBadge := dimStyle.Render("[FREE]")
 	if isProPlan() {
 		planBadge = badgeToken.Render("★ PRO")
 	}
 
-	header := fmt.Sprintf("%s  %s  %s  %s", title, planBadge, status, countBadge)
+	header := fmt.Sprintf("%s  %s  %s", title, planBadge, status)
+	if isUnlocked && m.vault != nil {
+		countBadge := badgeSSH.Render(fmt.Sprintf("%d segredos", m.vault.Count()))
+		header = fmt.Sprintf("%s  %s", header, countBadge)
+	}
+
 	return headerBoxStyle.Render(header)
 }
 
