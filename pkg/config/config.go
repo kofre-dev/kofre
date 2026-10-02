@@ -127,6 +127,12 @@ func LoadConfig() (*AppConfig, error) {
 		cfg.VaultPath, _ = GetDefaultVaultPath()
 	}
 
+	// Migração transparente de endpoints legados do Railway
+	if strings.Contains(cfg.CloudEndpoint, "kofre-api-production.up.railway.app") {
+		cfg.CloudEndpoint = DefaultCloudEndpoint
+		_ = SaveConfig(&cfg)
+	}
+
 	return &cfg, nil
 }
 
