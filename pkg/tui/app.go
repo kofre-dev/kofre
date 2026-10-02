@@ -274,7 +274,6 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			_ = mycrypto.SaveDeviceMasterKey(key)
 			m.state = ViewList
 			m.refreshList()
 			return m, m.notify("✓ Cofre inicializado com sucesso!")
@@ -310,7 +309,6 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.vault = v
 		m.state = ViewList
 		m.err = nil
-		_ = mycrypto.SaveDeviceMasterKey(key)
 		m.refreshList()
 		return m, m.notify("✓ Cofre desbloqueado em memoria RAM")
 
@@ -472,34 +470,11 @@ func (m Model) updateTelegramChallenge(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) finishTelegramUnlock() (tea.Model, tea.Cmd) {
-	ctx := context.Background()
-
-	// 1. Tenta carregar a chave de hardware vinculada a este computador
-	key, err := mycrypto.LoadDeviceMasterKey()
-	if err == nil && len(key) == 32 {
-		rawData, errLoad := m.storage.Load(ctx)
-		if errLoad == nil {
-			salt, encryptedPayload, errUnpack := vault.UnpackHeader(rawData)
-			if errUnpack == nil {
-				v, errDec := vault.DecryptAndLoad(encryptedPayload, key, salt)
-				if errDec == nil {
-					m.sessionKey = key
-					m.salt = salt
-					m.vault = v
-					m.state = ViewList
-					m.err = nil
-					m.refreshList()
-					return m, m.notify("✓ Desbloqueado com sucesso via Telegram!")
-				}
-			}
-		}
-	}
-
-	// 2. Se a chave não estava no hardware, o Telegram autorizou o acesso para definir nova senha
 	m.state = ViewUnlock
 	m.isNewVault = false
 	m.err = nil
-	return m, m.notify("✓ Autorizado pelo Telegram! Digite a senha mestra para abrir.")
+	m.passInput.Focus()
+	return m, m.notify("✓ 2FA aprovado via Telegram! Digite sua senha mestre para abrir na RAM.")
 }
 
 // ======================== TELA LISTA ========================

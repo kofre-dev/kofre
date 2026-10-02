@@ -42,14 +42,6 @@ func UnlockVaultWithKey(vaultPath string) (*vault.ManagedVault, []byte, []byte, 
 		return nil, nil, nil, err
 	}
 
-	// 1. Tenta usar a chave DPAPI vinculada a este dispositivo
-	if devKey, err := mycrypto.LoadDeviceMasterKey(); err == nil && len(devKey) == 32 {
-		if v, errDec := vault.DecryptAndLoad(encryptedPayload, devKey, salt); errDec == nil {
-			return v, devKey, salt, nil
-		}
-		mycrypto.ZeroBytes(devKey)
-	}
-
 	secret := os.Getenv("KOFRE_PIN")
 	if secret == "" {
 		secret = os.Getenv("MYCOFRE_PIN")

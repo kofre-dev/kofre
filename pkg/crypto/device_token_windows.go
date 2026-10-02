@@ -97,44 +97,18 @@ func getDeviceKeyPath() (string, error) {
 	return filepath.Join(dir, "device_key.bin"), nil
 }
 
-// SaveDeviceMasterKey persiste a chave mestra criptografada com DPAPI no computador local
-func SaveDeviceMasterKey(key []byte) error {
+// PurgeLegacyDeviceKey localiza e remove imediatamente com sobrescrita de zeros qualquer resquício de device_key.bin
+func PurgeLegacyDeviceKey() {
 	path, err := getDeviceKeyPath()
 	if err != nil {
-		return err
+		return
 	}
-
-	protected, err := EncryptWithDPAPI(key)
-	if err != nil {
-		return err
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		// Sobrescreve com zeros antes de deletar do disco (wipe seguro)
+		zeroData := make([]byte, info.Size())
+		_ = os.WriteFile(path, zeroData, 0600)
+		_ = os.Remove(path)
 	}
-
-	return os.WriteFile(path, protected, 0600)
-}
-
-// LoadDeviceMasterKey recupera a chave mestra utilizando o DPAPI do computador local
-func LoadDeviceMasterKey() ([]byte, error) {
-	path, err := getDeviceKeyPath()
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	return DecryptWithDPAPI(data)
-}
-
-// HasDeviceMasterKey verifica se há uma chave vinculada a este hardware
-func HasDeviceMasterKey() bool {
-	key, err := LoadDeviceMasterKey()
-	if err == nil && len(key) == 32 {
-		ZeroBytes(key)
-		return true
-	}
-	return false
 }
 
 // GenerateRandomOTP gera um código de 6 dígitos numéricos

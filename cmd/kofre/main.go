@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kofre/pkg/config"
+	mycrypto "kofre/pkg/crypto"
 	"kofre/pkg/importer"
 	"kofre/pkg/installer"
 	"kofre/pkg/runner"
@@ -62,6 +63,7 @@ Opções Globais (Flags):
 
 func main() {
 	updater.CleanupOldBinaries()
+	mycrypto.PurgeLegacyDeviceKey()
 
 	if len(os.Args) > 1 {
 		cmd := os.Args[1]

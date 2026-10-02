@@ -21,31 +21,17 @@ func getDeviceKeyPath() (string, error) {
 	return filepath.Join(dir, "device_key.bin"), nil
 }
 
-// SaveDeviceMasterKey em plataformas não-Windows (fallback seguro)
-func SaveDeviceMasterKey(key []byte) error {
+// PurgeLegacyDeviceKey localiza e remove imediatamente com sobrescrita de zeros qualquer resquício de device_key.bin
+func PurgeLegacyDeviceKey() {
 	path, err := getDeviceKeyPath()
 	if err != nil {
-		return err
+		return
 	}
-	return os.WriteFile(path, key, 0600)
-}
-
-// LoadDeviceMasterKey em plataformas não-Windows
-func LoadDeviceMasterKey() ([]byte, error) {
-	path, err := getDeviceKeyPath()
-	if err != nil {
-		return nil, err
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		zeroData := make([]byte, info.Size())
+		_ = os.WriteFile(path, zeroData, 0600)
+		_ = os.Remove(path)
 	}
-	return os.ReadFile(path)
-}
-
-func HasDeviceMasterKey() bool {
-	key, err := LoadDeviceMasterKey()
-	if err == nil && len(key) == 32 {
-		ZeroBytes(key)
-		return true
-	}
-	return false
 }
 
 func GenerateRandomOTP() string {
