@@ -84,6 +84,7 @@ type Model struct {
 }
 
 func NewModel(store storage.StorageProvider) Model {
+	mycrypto.ProtectProcess()
 	ctx := context.Background()
 	exists, _ := store.Exists(ctx)
 
@@ -230,6 +231,7 @@ func (m *Model) notify(msg string) tea.Cmd {
 
 func (m *Model) cleanup() {
 	if len(m.sessionKey) > 0 {
+		_ = mycrypto.UnlockMemory(m.sessionKey)
 		mycrypto.ZeroBytes(m.sessionKey)
 		m.sessionKey = nil
 	}
@@ -304,6 +306,7 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		_ = mycrypto.LockMemory(key)
 		m.sessionKey = key
 		m.salt = salt
 		m.vault = v

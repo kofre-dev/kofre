@@ -62,6 +62,7 @@ Opções Globais (Flags):
 }
 
 func main() {
+	mycrypto.ProtectProcess()
 	updater.CleanupOldBinaries()
 	mycrypto.PurgeLegacyDeviceKey()
 

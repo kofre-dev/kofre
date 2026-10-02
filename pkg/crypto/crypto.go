@@ -87,9 +87,7 @@ func Decrypt(payload, key []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// ZeroBytes limpa buffers de memoria sensiveis (chaves, senhas) sobrescrevendo com zeros.
+// ZeroBytes limpa buffers de memoria sensiveis (chaves, senhas) sobrescrevendo com zeros de forma segura.
 func ZeroBytes(b []byte) {
-	for i := range b {
-		b[i] = 0
-	}
+	WipeBytes(b)
 }
