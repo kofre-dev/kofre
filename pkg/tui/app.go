@@ -650,6 +650,13 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = max(0, len(m.filteredItems)-1)
 		m.adjustScroll()
 		return m, nil
+	case tea.KeyShiftTab:
+		totalCats := len(vault.AllCategories) + 1
+		m.selectedCatIdx = (m.selectedCatIdx - 1 + totalCats) % totalCats
+		m.cursor = 0
+		m.scrollOffset = 0
+		m.refreshList()
+		return m, nil
 	}
 
 	// 2. Checagem por texto/caractere (inclui alias vim j/k, pgup/pgdn, etc.)
@@ -665,6 +672,14 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "tab":
 		m.selectedCatIdx = (m.selectedCatIdx + 1) % (len(vault.AllCategories) + 1)
+		m.cursor = 0
+		m.scrollOffset = 0
+		m.refreshList()
+		return m, nil
+
+	case "shift+tab", "backtab":
+		totalCats := len(vault.AllCategories) + 1
+		m.selectedCatIdx = (m.selectedCatIdx - 1 + totalCats) % totalCats
 		m.cursor = 0
 		m.scrollOffset = 0
 		m.refreshList()
@@ -1291,7 +1306,7 @@ func (m Model) viewList() string {
 	if isProPlan() {
 		proHelp = "• [p] Status Pro "
 	}
-	b.WriteString(helpStyle.Render("\n[↑/↓/Scroll] Navegar • [PgUp/PgDn] Pular • [Enter] Detalhes • [c] Copiar • [n] Novo • [d] Excluir • [/] Buscar " + proHelp + "• [Tab] Filtro • [q] Sair"))
+	b.WriteString(helpStyle.Render("\n[↑/↓/Scroll] Navegar • [PgUp/PgDn] Pular • [Enter] Detalhes • [c] Copiar • [n] Novo • [d] Excluir • [/] Buscar " + proHelp + "• [Tab/Shift+Tab] Filtro • [q] Sair"))
 
 	return b.String()
 }
