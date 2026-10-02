@@ -236,7 +236,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case challengePollMsg:
 		if m.state == ViewTelegramChallenge {
 			if msg.status == "approved" {
-				return m.finishTelegramUnlock()
+				return m.finishTelegramUnlock(msg.unlockSecret)
 			} else if msg.status == "rejected" {
 				m.state = ViewUnlock
 				m.err = fmt.Errorf("solicitação recusada no Telegram ou cofre bloqueado")
@@ -349,8 +349,9 @@ func (m *Model) Close() { m.cleanup() }
 
 type challengeTickMsg time.Time
 type challengePollMsg struct {
-	status string
-	err    error
+	status       string
+	unlockSecret string
+	err          error
 }
 
 func (m *Model) notify(msg string) tea.Cmd {
@@ -458,6 +459,16 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.lastActivity = time.Now()
 		m.err = nil
 		m.refreshList()
+
+		// Provisiona silenciosamente o envelope do Telegram para futuros desbloqueios sem senha
+		if cfg, _ := config.LoadConfig(); cfg != nil && cfg.CloudEnabled && cfg.KofreToken != "" {
+			go func(k []byte, tok, ep string) {
+				keyCopy := append([]byte(nil), k...)
+				defer mycrypto.ZeroBytes(keyCopy)
+				_ = mycrypto.SaveTelegramUnlockEnvelope(keyCopy, tok, ep)
+			}(key, cfg.KofreToken, config.GetCloudEndpoint())
+		}
+
 		return m, m.notify("✓ Cofre desbloqueado em memoria RAM")
 
 	case tea.KeyCtrlP:
@@ -558,10 +569,11 @@ func (m Model) pollChallengeStatus(id, endpoint string) tea.Cmd {
 		defer resp.Body.Close()
 
 		var res struct {
-			Status string `json:"status"`
+			Status       string `json:"status"`
+			UnlockSecret string `json:"unlock_secret"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&res)
-		return challengePollMsg{status: res.Status}
+		return challengePollMsg{status: res.Status, unlockSecret: res.UnlockSecret}
 	})
 }
 
@@ -606,7 +618,14 @@ func (m Model) updateTelegramChallenge(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		return m.finishTelegramUnlock()
+		var res struct {
+			Valid        bool   `json:"valid"`
+			Status       string `json:"status"`
+			UnlockSecret string `json:"unlock_secret"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&res)
+
+		return m.finishTelegramUnlock(res.UnlockSecret)
 	}
 
 	var cmd tea.Cmd
@@ -614,12 +633,42 @@ func (m Model) updateTelegramChallenge(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m Model) finishTelegramUnlock() (tea.Model, tea.Cmd) {
+func (m Model) finishTelegramUnlock(unlockSecret string) (tea.Model, tea.Cmd) {
+	ctx := context.Background()
+
+	// 1. Se recebemos o segredo do Telegram e temos o envelope split-key local: abre o cofre diretamente
+	if unlockSecret != "" && mycrypto.HasTelegramUnlockEnvelope() {
+		vaultKey, err := mycrypto.OpenTelegramUnlockEnvelope(unlockSecret)
+		if err == nil {
+			defer mycrypto.ZeroBytes(vaultKey)
+
+			rawData, err := m.storage.Load(ctx)
+			if err == nil {
+				salt, encryptedPayload, err := vault.UnpackHeader(rawData)
+				if err == nil {
+					v, err := vault.DecryptAndLoad(encryptedPayload, vaultKey, salt)
+					if err == nil {
+						m.sessionKey, _ = mycrypto.SealMemory(vaultKey)
+						m.salt = salt
+						m.vault = v
+						m.state = ViewList
+						m.isNewVault = false
+						m.lastActivity = time.Now()
+						m.err = nil
+						m.refreshList()
+						return m, m.notify("✓ Cofre desbloqueado com sucesso via Telegram!")
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Se o envelope ainda não foi salvo nesta máquina, pede a senha mestre uma única vez para salvar
 	m.state = ViewUnlock
 	m.isNewVault = false
 	m.err = nil
 	m.passInput.Focus()
-	return m, m.notify("✓ 2FA aprovado via Telegram! Digite sua senha mestre para abrir na RAM.")
+	return m, m.notify("✓ Aprovado no Telegram! Digite sua senha mestre uma vez para salvar o acesso rápido.")
 }
 
 // ======================== TELA LISTA ========================
