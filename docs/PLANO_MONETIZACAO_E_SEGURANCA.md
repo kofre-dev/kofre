@@ -1,5 +1,7 @@
 # Kofre 🔐 — Plano de Monetização Global & Simulação de Ataques
 
+> Atualização comercial em 02/10/2026: a proposta vigente está em [MONETIZACAO_PRO_ENTERPRISE.md](MONETIZACAO_PRO_ENTERPRISE.md). A seção comercial abaixo é histórica: Polar não foi confirmado para vendedor brasileiro; estimativas de margem e desempenho não são resultados medidos; assinatura paga ainda não está implementada. As alegações de segurança devem ser conferidas com o relatório vigente de falhas e os testes do código atual.
+
 Este documento consolida a estratégia de expansão comercial no mercado global (meta: 1.000 usuários pagantes) e o protocolo de testes de segurança extrema (Threat Modeling & Simulação de Ataques) para o **Kofre** (`kofre.dev`).
 
 ---

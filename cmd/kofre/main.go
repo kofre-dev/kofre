@@ -33,6 +33,7 @@ func printHelp() {
   kofre exec <cmd...>     Injeta segredos na memória e executa o comando filho
   kofre shell             Abre um subshell interativo temporário com segredos
   kofre install           Instala no seu sistema e adiciona ao PATH do terminal
+  kofre uninstall         Desinstala o aplicativo, preservando o vault (ou --uninstall)
   kofre config            Assistente interativo de configuração (S3, Cloud, Telegram)
   kofre login <token>     Conecta sua licença Kofre Cloud Pro para sync automático
   kofre telegram          Vincula seu cofre ao Bot do Telegram (Alertas e Pânico)
@@ -62,6 +63,34 @@ Opções Globais (Flags):
 }
 
 func main() {
+	// Gerenciamento local não deve atualizar, abrir ou modificar o vault.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "uninstall", "--uninstall":
+			if err := installer.Uninstall(); err != nil {
+				fmt.Fprintln(os.Stderr, "Falha ao desinstalar:", err)
+				os.Exit(1)
+			}
+			fmt.Println("Desinstalacao iniciada. Feche outras janelas do Kofre. Vault, configuracoes e backups serao preservados.")
+			fmt.Println("Resultado em:", filepath.Join(os.TempDir(), "Kofre-desinstalacao.log"))
+			return
+		case "install":
+			dest, err := installer.InstallBinary()
+			if err == nil {
+				err = installer.RegisterInstallation(dest, updater.CurrentVersion)
+			}
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "Falha ao instalar:", err)
+				os.Exit(1)
+			}
+			fmt.Println("Kofre instalado em:", dest)
+			fmt.Println("Para abrir novamente, digite 'kofre' em um novo CMD ou PowerShell.")
+			return
+		}
+	}
+	if err := installer.RefreshRegistration(updater.CurrentVersion); err != nil {
+		fmt.Fprintln(os.Stderr, "Aviso ao registrar o aplicativo no Windows:", err)
+	}
 	mycrypto.ProtectProcess()
 	updater.CleanupOldBinaries()
 	mycrypto.PurgeLegacyDeviceKey()
@@ -95,17 +124,6 @@ func main() {
 
 		case "shell":
 			handleShell(os.Args[2:])
-			return
-
-		case "install":
-			dest, err := installer.InstallBinary()
-			if err != nil {
-				fmt.Printf("⚠️  Aviso: %v\n", err)
-			} else {
-				fmt.Printf("✓ Kofre instalado com sucesso em:\n  %s\n\n", dest)
-				fmt.Println("O diretório foi adicionado ao seu PATH.")
-				fmt.Println("Abra um novo terminal e digite 'kofre' de qualquer lugar!")
-			}
 			return
 
 		case "config":
@@ -216,7 +234,11 @@ func main() {
 	}
 
 	p := tea.NewProgram(tui.NewModel(store), tea.WithAltScreen(), tea.WithMouseCellMotion())
-	if _, err := p.Run(); err != nil {
+	finalModel, runErr := p.Run()
+	if model, ok := finalModel.(tui.Model); ok {
+		model.Close()
+	}
+	if err := runErr; err != nil {
 		fmt.Fprintf(os.Stderr, "Erro na execução do Kofre: %v\n", err)
 		os.Exit(1)
 	}

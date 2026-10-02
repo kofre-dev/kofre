@@ -10,14 +10,14 @@ import (
 )
 
 var (
-	modkernel32        = windows.NewLazySystemDLL("kernel32.dll")
-	procVirtualLock    = modkernel32.NewProc("VirtualLock")
-	procVirtualUnlock  = modkernel32.NewProc("VirtualUnlock")
+	modkernel32       = windows.NewLazySystemDLL("kernel32.dll")
+	procVirtualLock   = modkernel32.NewProc("VirtualLock")
+	procVirtualUnlock = modkernel32.NewProc("VirtualUnlock")
 )
 
-// ProtectProcess aplica políticas anti-dump e anti-inspeção no Windows
+// ProtectProcess desativa diálogos de erro. Não impede ReadProcessMemory ou dumps.
 func ProtectProcess() {
-	// 1. Desativa a geração de relatórios de crash / dump para o disco
+	// Evita diálogos de erro; não constitui isolamento de memória.
 	// SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
 	const semFlags = 0x0001 | 0x0002
 	procSetErrorMode := modkernel32.NewProc("SetErrorMode")

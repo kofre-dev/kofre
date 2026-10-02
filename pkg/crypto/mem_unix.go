@@ -10,17 +10,7 @@ import (
 
 // ProtectProcess blinda o processo contra ptrace (debuggers) e geração de coredump
 func ProtectProcess() {
-	switch runtime.GOOS {
-	case "linux":
-		// PR_SET_DUMPABLE = 0: Impede que outros processos do mesmo usuário façam ptrace/ReadProcessMemory
-		// e impede que core dumps sejam gerados em disco no caso de falha fatal.
-		_ = unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
-
-	case "darwin":
-		// PT_DENY_ATTACH (31): Impede LLDB, DTrace e outros depuradores de anexar à memória do processo.
-		const ptDenyAttach = 31
-		_, _, _ = unix.Syscall(unix.SYS_PTRACE, uintptr(ptDenyAttach), 0, 0)
-	}
+	protectProcessOS()
 }
 
 // LockMemory trava o buffer na RAM física usando mlock(2), impedindo swap para o disco

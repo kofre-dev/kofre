@@ -1,6 +1,7 @@
 package vault
 
 import (
+	mycrypto "kofre/pkg/crypto"
 	"time"
 )
 
@@ -29,6 +30,7 @@ type Field struct {
 	Name      string `json:"name"`
 	Value     string `json:"value"`
 	Protected bool   `json:"protected"` // se true, mascara na interface com ••••••
+	sealed    *mycrypto.SealedBuffer
 }
 
 // Attachment permite armazenar certificados (.pem, .pfx, .crt) ou chaves privadas

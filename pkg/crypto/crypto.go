@@ -28,6 +28,12 @@ var (
 // DeriveKey gera uma chave AES-256 de 32 bytes a partir de um segredo/passphrase usando Argon2id.
 // Se salt for nil ou vazio, um novo salt criptograficamente seguro e gerado.
 func DeriveKey(secret string, salt []byte) ([]byte, []byte, error) {
+	password := []byte(secret)
+	defer ZeroBytes(password)
+	return DeriveKeyBytes(password, salt)
+}
+
+func DeriveKeyBytes(password, salt []byte) ([]byte, []byte, error) {
 	if len(salt) == 0 {
 		salt = make([]byte, SaltLength)
 		if _, err := io.ReadFull(rand.Reader, salt); err != nil {
@@ -35,7 +41,7 @@ func DeriveKey(secret string, salt []byte) ([]byte, []byte, error) {
 		}
 	}
 
-	key := argon2.IDKey([]byte(secret), salt, ArgonTime, ArgonMemory, ArgonThreads, KeyLength)
+	key := argon2.IDKey(password, salt, ArgonTime, ArgonMemory, ArgonThreads, KeyLength)
 	return key, salt, nil
 }
 

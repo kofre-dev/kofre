@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +23,10 @@ import (
 )
 
 type ViewState int
+
+// Substituídos apenas nos testes de ciclo da área de transferência.
+var readClipboard = clipboard.ReadAll
+var writeClipboard = clipboard.WriteAll
 
 const (
 	ViewUnlock ViewState = iota
@@ -44,11 +49,11 @@ type Model struct {
 	isNewVault    bool
 
 	// Chave e salt da sessao
-	sessionKey []byte
+	sessionKey *mycrypto.SealedBuffer
 	salt       []byte
 
 	// Inputs da tela de Unlock
-	passInput textinput.Model
+	passInput input
 
 	// Desafio Telegram com Timeout
 	challengeID        string
@@ -59,19 +64,25 @@ type Model struct {
 	// Tela de Lista
 	searchInput    textinput.Model
 	searchFocused  bool
+	showHelp       bool
+	helpOffset     int
 	filteredItems  []vault.SecretEntry
 	cursor         int
 	scrollOffset   int
 	selectedCatIdx int // 0 = Todas, 1 = Senhas, 2 = Tokens, etc.
 
 	// Tela de Detalhes
-	selectedEntry vault.SecretEntry
-	detailCursor  int
-	revealed      bool
+	selectedEntry  vault.SecretEntry
+	detailCursor   int
+	revealed       bool
+	revealUntil    time.Time
+	lastActivity   time.Time
+	clipboardHash  [32]byte
+	clipboardOwned bool
 
 	// Tela de Formulario (Criar / Editar)
 	isEditing      bool
-	formInputs     []textinput.Model
+	formInputs     []input
 	formFocusIndex int
 	formCategory   vault.Category
 
@@ -89,7 +100,7 @@ func NewModel(store storage.StorageProvider) Model {
 	exists, _ := store.Exists(ctx)
 
 	// Input de desbloqueio
-	pi := textinput.New()
+	pi := newInput(true)
 	pi.Placeholder = "Digite seu PIN ou senha mestre"
 	pi.EchoMode = textinput.EchoPassword
 	pi.EchoCharacter = '•'
@@ -113,7 +124,7 @@ func NewModel(store storage.StorageProvider) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(textinput.Blink, securityTick())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -126,6 +137,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.adjustScroll()
 
 	case tea.MouseMsg:
+		m.lastActivity = time.Now()
+		if m.showHelp {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				m.helpOffset = max(0, m.helpOffset-1)
+			case tea.MouseButtonWheelDown:
+				m.helpOffset = min(m.helpOffset+1, m.helpMaxOffset())
+			}
+			return m, nil
+		}
 		if m.state == ViewList {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp:
@@ -157,10 +178,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		m.lastActivity = time.Now()
+		if msg.Type == tea.KeyCtrlL && m.vault != nil {
+			m.lock()
+			return m, nil
+		}
 		// Tecla global para sair
 		if msg.Type == tea.KeyCtrlC {
 			m.cleanup()
 			return m, tea.Quit
+		}
+		if m.state == ViewList && msg.Type == tea.KeyF1 {
+			m.showHelp = !m.showHelp
+			m.helpOffset = 0
+			return m, nil
+		}
+		if m.showHelp {
+			switch msg.String() {
+			case "esc", "q":
+				m.showHelp = false
+			case "up", "k":
+				m.helpOffset = max(0, m.helpOffset-1)
+			case "down", "j":
+				m.helpOffset = min(m.helpOffset+1, m.helpMaxOffset())
+			}
+			return m, nil
 		}
 
 		switch m.state {
@@ -210,12 +252,98 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case clearNotifMsg:
 		m.notification = ""
+	case securityTickMsg:
+		if m.revealed && time.Now().After(m.revealUntil) {
+			m.revealed = false
+		}
+		if m.vault != nil && time.Since(m.lastActivity) >= 5*time.Minute {
+			m.lock()
+		}
+		return m, securityTick()
+	case clearClipboardMsg:
+		if m.clipboardOwned && m.clipboardHash == msg.hash {
+			m.clearClipboard()
+		}
 	}
 
 	return m, tea.Batch(cmds...)
 }
 
 type clearNotifMsg struct{}
+type securityTickMsg struct{}
+type clearClipboardMsg struct{ hash [32]byte }
+
+func securityTick() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return securityTickMsg{} })
+}
+
+func (m *Model) clearClipboard() {
+	if !m.clipboardOwned {
+		return
+	}
+	if value, err := readClipboard(); err == nil && sha256.Sum256([]byte(value)) == m.clipboardHash {
+		_ = writeClipboard("")
+	}
+	m.clipboardOwned = false
+	m.clipboardHash = [32]byte{}
+}
+
+func (m *Model) copyField(field vault.Field) tea.Cmd {
+	err := field.WithValue(func(value []byte) error {
+		if err := writeClipboard(string(value)); err != nil {
+			return err
+		}
+		m.clipboardHash = sha256.Sum256(value)
+		m.clipboardOwned = true
+		return nil
+	})
+	if err != nil {
+		m.err = err
+		return nil
+	}
+	hash := m.clipboardHash
+	return tea.Batch(m.notify("Campo copiado; limpeza em 30 segundos"), tea.Tick(30*time.Second, func(time.Time) tea.Msg { return clearClipboardMsg{hash} }))
+}
+
+func (m *Model) clearForm() {
+	for i := range m.formInputs {
+		m.formInputs[i].Reset()
+		m.formInputs[i] = input{}
+	}
+	m.formInputs = nil
+}
+
+func (m *Model) lock() {
+	m.showHelp = false
+	if m.vault != nil && m.vault.IsDirty() {
+		m.err = fmt.Errorf("cofre bloqueado; alteracoes que falharam ao gravar foram descartadas")
+	}
+	m.sessionKey.Close()
+	m.sessionKey = nil
+	if m.vault != nil {
+		m.vault.Close()
+		m.vault = nil
+	}
+	m.clearForm()
+	m.selectedEntry = vault.SecretEntry{}
+	m.filteredItems = nil
+	m.revealed = false
+	m.passInput.Reset()
+	m.challengeCodeInput.Reset()
+	m.challengeID = ""
+	m.clearClipboard()
+	m.state = ViewUnlock
+	m.passInput.Focus()
+}
+
+func (m *Model) pack() (packed []byte, err error) {
+	err = m.sessionKey.WithBytes(func(key []byte) error { packed, err = m.vault.Pack(key, m.salt); return err })
+	return
+}
+
+// Close também permite limpar o modelo final quando o terminal encerra o programa.
+func (m *Model) Close() { m.cleanup() }
+
 type challengeTickMsg time.Time
 type challengePollMsg struct {
 	status string
@@ -230,11 +358,7 @@ func (m *Model) notify(msg string) tea.Cmd {
 }
 
 func (m *Model) cleanup() {
-	if len(m.sessionKey) > 0 {
-		_ = mycrypto.UnlockMemory(m.sessionKey)
-		mycrypto.ZeroBytes(m.sessionKey)
-		m.sessionKey = nil
-	}
+	m.lock()
 	if syncer, ok := m.storage.(interface{ Flush(time.Duration) }); ok {
 		syncer.Flush(3 * time.Second)
 	}
@@ -247,8 +371,11 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyEnter:
-		secret := strings.TrimSpace(m.passInput.Value())
-		if secret == "" {
+		secretBuffer := m.passInput.Bytes()
+		defer mycrypto.ZeroBytes(secretBuffer)
+		secret := bytes.TrimSpace(secretBuffer)
+		m.passInput.Reset()
+		if len(secret) == 0 {
 			m.err = fmt.Errorf("informe uma chave ou PIN")
 			return m, nil
 		}
@@ -256,27 +383,36 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ctx := context.Background()
 		if m.isNewVault {
 			// Criando cofre inicial
-			key, salt, err := mycrypto.DeriveKey(secret, nil)
+			key, salt, err := mycrypto.DeriveKeyBytes(secret, nil)
 			if err != nil {
 				m.err = err
 				return m, nil
 			}
-			m.sessionKey = key
+			defer mycrypto.ZeroBytes(key)
+			m.sessionKey, err = mycrypto.SealMemory(key)
+			if err != nil {
+				m.err = err
+				return m, nil
+			}
 			m.salt = salt
 			m.vault = vault.NewManaged()
 
 			// Salva inicialmente
-			packed, err := m.vault.Pack(m.sessionKey, m.salt)
+			packed, err := m.pack()
 			if err != nil {
+				m.lock()
 				m.err = err
 				return m, nil
 			}
 			if err := m.storage.Save(ctx, packed); err != nil {
+				m.lock()
 				m.err = err
 				return m, nil
 			}
 
 			m.state = ViewList
+			m.isNewVault = false
+			m.lastActivity = time.Now()
 			m.refreshList()
 			return m, m.notify("✓ Cofre inicializado com sucesso!")
 		}
@@ -294,36 +430,39 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		key, _, err := mycrypto.DeriveKey(secret, salt)
+		key, _, err := mycrypto.DeriveKeyBytes(secret, salt)
 		if err != nil {
 			m.err = err
 			return m, nil
 		}
 
 		v, err := vault.DecryptAndLoad(encryptedPayload, key, salt)
+		defer mycrypto.ZeroBytes(key)
 		if err != nil {
 			m.err = fmt.Errorf("chave/PIN incorreto")
 			return m, nil
 		}
 
-		_ = mycrypto.LockMemory(key)
-		m.sessionKey = key
+		m.sessionKey, err = mycrypto.SealMemory(key)
+		if err != nil {
+			v.Close()
+			m.err = err
+			return m, nil
+		}
 		m.salt = salt
 		m.vault = v
 		m.state = ViewList
+		m.lastActivity = time.Now()
 		m.err = nil
 		m.refreshList()
 		return m, m.notify("✓ Cofre desbloqueado em memoria RAM")
 
-	case tea.KeyRunes:
-		if msg.String() == "p" || msg.String() == "P" {
-			m.previousState = m.state
-			m.state = ViewPro
-			return m, nil
-		}
-		if msg.String() == "t" || msg.String() == "T" {
-			return m.startTelegramChallenge()
-		}
+	case tea.KeyCtrlP:
+		m.previousState = m.state
+		m.state = ViewPro
+		return m, nil
+	case tea.KeyCtrlT:
+		return m.startTelegramChallenge()
 
 	case tea.KeyEsc:
 		return m, tea.Quit
@@ -487,14 +626,14 @@ func (m Model) visibleListHeight() int {
 	if h <= 0 {
 		return 10
 	}
-	// Desconta: Header (3) + Tabs (2) + Search (1) + Spacers e Indicadores (3) + Footer (3) + Margem de segurança (3)
-	overhead := 15
+	// Reserva o espaço real do rodapé, que cresce em janelas estreitas.
+	overhead := 12 + lipgloss.Height(m.listFooter())
 	if m.notification != "" || m.err != nil {
 		overhead += 2
 	}
 	avail := h - overhead
-	if avail < 4 {
-		return 4
+	if avail < 1 {
+		return 1
 	}
 	return avail
 }
@@ -718,19 +857,16 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Copia rapida da senha/token principal
 		if len(m.filteredItems) > 0 {
 			entry := m.filteredItems[m.cursor]
-			secretVal := ""
-			for _, f := range entry.Fields {
+			index := 0
+			for i, f := range entry.Fields {
 				if f.Protected {
-					secretVal = f.Value
+					index = i
 					break
 				}
 			}
-			if secretVal == "" && len(entry.Fields) > 0 {
-				secretVal = entry.Fields[0].Value
-			}
-			if secretVal != "" {
-				_ = clipboard.WriteAll(secretVal)
-				return m, m.notify("📋 Segredo copiado para a area de transferencia!")
+			if len(entry.Fields) > 0 {
+				cmd := m.copyField(entry.Fields[index])
+				return m, cmd
 			}
 		}
 
@@ -763,11 +899,14 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "b", "q":
 		m.state = ViewList
+		m.revealed = false
+		m.selectedEntry = vault.SecretEntry{}
 		m.refreshList()
 		return m, nil
 
 	case "v", " ":
 		m.revealed = !m.revealed
+		m.revealUntil = time.Now().Add(15 * time.Second)
 		return m, nil
 
 	case "up", "k":
@@ -786,16 +925,18 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter", "c":
 		if len(m.selectedEntry.Fields) > 0 && m.detailCursor < len(m.selectedEntry.Fields) {
 			field := m.selectedEntry.Fields[m.detailCursor]
-			_ = clipboard.WriteAll(field.Value)
-			return m, m.notify(fmt.Sprintf("📋 '%s' copiado!", field.Name))
+			cmd := m.copyField(field)
+			return m, cmd
 		}
 
 	case "e":
+		m.revealed = false
 		m.initForm(m.selectedEntry, true)
 		m.state = ViewForm
 		return m, nil
 
 	case "d":
+		m.revealed = false
 		m.deleteID = m.selectedEntry.ID
 		m.deleteTitle = m.selectedEntry.Title
 		m.state = ViewConfirmDelete
@@ -808,6 +949,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // ======================== TELA FORMULARIO (ADD/EDIT) ========================
 
 func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
+	m.clearForm()
 	m.isEditing = isEdit
 	m.formFocusIndex = 0
 
@@ -816,15 +958,15 @@ func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
 	// 2: Usuario / Identificador
 	// 3: Segredo / Senha / Token
 	// 4: Notas
-	m.formInputs = make([]textinput.Model, 5)
+	m.formInputs = make([]input, 5)
 
-	m.formInputs[0] = textinput.New()
+	m.formInputs[0] = newInput(false)
 	m.formInputs[0].Placeholder = "Ex: AWS Producao, Banco Master, GitHub PAT"
 	m.formInputs[0].Prompt = "Titulo: "
 	m.formInputs[0].SetValue(entry.Title)
 	m.formInputs[0].Focus()
 
-	m.formInputs[1] = textinput.New()
+	m.formInputs[1] = newInput(false)
 	m.formInputs[1].Placeholder = "password, token, certificate, ssh_key, auth, note"
 	m.formInputs[1].Prompt = "Categoria: "
 	catVal := string(entry.Category)
@@ -843,19 +985,22 @@ func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
 		}
 	}
 
-	m.formInputs[2] = textinput.New()
+	m.formInputs[2] = newInput(false)
 	m.formInputs[2].Placeholder = "admin / root / seu@email.com"
 	m.formInputs[2].Prompt = "Usuario/ID: "
 	m.formInputs[2].SetValue(userVal)
 
-	m.formInputs[3] = textinput.New()
+	m.formInputs[3] = newInput(true)
 	m.formInputs[3].Placeholder = "•••••••• (ou aperte 'g' para gerar)"
 	m.formInputs[3].Prompt = "Segredo/Senha: "
 	m.formInputs[3].EchoMode = textinput.EchoPassword
 	m.formInputs[3].EchoCharacter = '•'
 	m.formInputs[3].SetValue(passVal)
+	if isEdit {
+		m.formInputs[3].Placeholder = "Deixe vazio para manter o segredo atual"
+	}
 
-	m.formInputs[4] = textinput.New()
+	m.formInputs[4] = newInput(false)
 	m.formInputs[4].Placeholder = "Detalhes, URLs, portas ou lembretes"
 	m.formInputs[4].Prompt = "Notas: "
 	m.formInputs[4].SetValue(entry.Notes)
@@ -866,6 +1011,9 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyEsc:
+		m.clearForm()
+		m.selectedEntry = vault.SecretEntry{}
+		m.revealed = false
 		m.state = ViewList
 		return m, nil
 
@@ -910,8 +1058,9 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Atalho 'ctrl+g' no campo de senha para gerar chave forte
 	if msg.Type == tea.KeyCtrlG && m.formFocusIndex == 3 {
-		pwd := mycrypto.GenerateSecurePassword(24)
-		m.formInputs[3].SetValue(pwd)
+		pwd := mycrypto.GenerateSecurePasswordBytes(24)
+		m.formInputs[3].SetBytes(pwd)
+		mycrypto.ZeroBytes(pwd)
 		return m, m.notify("🔑 Senha forte de 24 caracteres gerada!")
 	}
 
@@ -932,23 +1081,61 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	}
 
 	userVal := strings.TrimSpace(m.formInputs[2].Value())
-	secretVal := strings.TrimSpace(m.formInputs[3].Value())
+	secretVal := m.formInputs[3].Bytes()
+	defer mycrypto.ZeroBytes(secretVal)
+	var secretField vault.Field
+	if len(secretVal) > 0 {
+		var err error
+		secretField, err = vault.NewProtectedField("Segredo", secretVal)
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		defer secretField.Close()
+	}
 	notesVal := strings.TrimSpace(m.formInputs[4].Value())
 
 	fields := make([]vault.Field, 0)
 	if userVal != "" {
 		fields = append(fields, vault.Field{Name: "Usuario", Value: userVal, Protected: false})
 	}
-	if secretVal != "" {
-		fields = append(fields, vault.Field{Name: "Segredo", Value: secretVal, Protected: true})
+	if len(secretVal) > 0 {
+		fields = append(fields, secretField)
 	}
 
 	if m.isEditing {
-		m.selectedEntry.Title = title
-		m.selectedEntry.Category = cat
-		m.selectedEntry.Fields = fields
-		m.selectedEntry.Notes = notesVal
-		_ = m.vault.UpdateEntry(m.selectedEntry)
+		entry, err := m.vault.GetEntry(m.selectedEntry.ID)
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		entry.Title, entry.Category, entry.Notes = title, cat, notesVal
+		userUpdated, secretUpdated := false, false
+		for i := range entry.Fields {
+			f := &entry.Fields[i]
+			if !f.Protected && !userUpdated && (strings.EqualFold(f.Name, "usuario") || strings.EqualFold(f.Name, "username") || strings.EqualFold(f.Name, "login")) {
+				f.Value = userVal
+				userUpdated = true
+			}
+			if f.Protected && !secretUpdated {
+				if len(secretVal) > 0 {
+					name := f.Name
+					*f = secretField
+					f.Name = name
+				}
+				secretUpdated = true
+			}
+		}
+		if !userUpdated && userVal != "" {
+			entry.Fields = append(entry.Fields, vault.Field{Name: "Usuario", Value: userVal})
+		}
+		if !secretUpdated && len(secretVal) > 0 {
+			entry.Fields = append(entry.Fields, secretField)
+		}
+		if err := m.vault.UpdateEntry(entry); err != nil {
+			m.err = err
+			return m, nil
+		}
 	} else {
 		newEntry := vault.SecretEntry{
 			Title:    title,
@@ -956,12 +1143,22 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 			Fields:   fields,
 			Notes:    notesVal,
 		}
-		m.selectedEntry = m.vault.AddEntry(newEntry)
+		entry, err := m.vault.AddEntry(newEntry)
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.selectedEntry = entry
+		m.isEditing = true // Em falha de armazenamento, tentar novamente não duplica a entrada.
 	}
+	// Depois de selar, o formulário não precisa manter a senha digitada.
+	m.formInputs[3].Reset()
+	m.formInputs[3].EchoMode = textinput.EchoPassword
+	m.formInputs[3].Placeholder = "Deixe vazio para manter o segredo atual"
 
 	// Persiste o cofre criptografado
 	ctx := context.Background()
-	packed, err := m.vault.Pack(m.sessionKey, m.salt)
+	packed, err := m.pack()
 	if err != nil {
 		m.err = err
 		return m, nil
@@ -973,6 +1170,10 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	}
 
 	m.vault.MarkClean()
+	m.err = nil
+	m.clearForm()
+	m.selectedEntry = vault.SecretEntry{}
+	m.revealed = false
 	m.state = ViewList
 	m.refreshList()
 	return m, m.notify("💾 Credencial salva e criptografada com sucesso!")
@@ -983,10 +1184,23 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 func (m Model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "s", "Y", "S":
-		_ = m.vault.DeleteEntry(m.deleteID)
+		if err := m.vault.DeleteEntry(m.deleteID); err != nil && err != vault.ErrNotFound {
+			m.err = err
+			return m, nil
+		}
 		ctx := context.Background()
-		packed, _ := m.vault.Pack(m.sessionKey, m.salt)
-		_ = m.storage.Save(ctx, packed)
+		packed, err := m.pack()
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		if err := m.storage.Save(ctx, packed); err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.vault.MarkClean()
+		m.err = nil
+		m.selectedEntry = vault.SecretEntry{}
 		m.state = ViewList
 		m.refreshList()
 		return m, m.notify(fmt.Sprintf("🗑️ '%s' excluida com sucesso", m.deleteTitle))
@@ -1080,9 +1294,9 @@ func (m Model) activateProPlan() (tea.Model, tea.Cmd) {
 	m.storage = storage.NewSyncStorage(m.storage, cloudStore)
 
 	// Sincroniza cofre para a nuvem se estiver aberto em memória
-	if m.vault != nil && len(m.sessionKey) > 0 && len(m.salt) > 0 {
+	if m.vault != nil && m.sessionKey != nil && len(m.salt) > 0 {
 		ctx := context.Background()
-		if packed, err := m.vault.Pack(m.sessionKey, m.salt); err == nil && len(packed) >= 60 {
+		if packed, err := m.pack(); err == nil && len(packed) >= 60 {
 			_ = m.storage.Save(ctx, packed)
 		}
 	}
@@ -1100,6 +1314,9 @@ func (m Model) activateProPlan() (tea.Model, tea.Cmd) {
 // ======================== VIEWS (RENDERIZACAO) ========================
 
 func (m Model) View() string {
+	if m.showHelp {
+		return m.viewHelp()
+	}
 	var s strings.Builder
 
 	// Header padrao
@@ -1164,7 +1381,7 @@ func (m Model) viewUnlock() string {
 	if isProPlan() {
 		b.WriteString(badgeToken.Render("★ KOFRE CLOUD PRO ATIVO (Zero-Knowledge E2EE)") + "\n\n")
 	} else {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("★ Plano FREE (Offline / Local) • Pressione [p] para ativar Plano Cloud Pro") + "\n\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("★ Plano FREE (Offline / Local) • Pressione [Ctrl+P] para ativar Plano Cloud Pro") + "\n\n")
 	}
 
 	if m.isNewVault {
@@ -1176,7 +1393,7 @@ func (m Model) viewUnlock() string {
 	}
 
 	b.WriteString(m.passInput.View() + "\n\n")
-	b.WriteString(helpStyle.Render("[Enter] Confirmar Senha  •  [p] Plano Pro  •  [t] Desbloquear com Telegram (com Timeout)  •  [Esc] Sair"))
+	b.WriteString(helpStyle.Render("[Enter] Confirmar Senha  •  [Ctrl+P] Plano Pro  •  [Ctrl+T] Desbloquear com Telegram (com Timeout)  •  [Esc] Sair"))
 
 	return boxStyle.Render(b.String())
 }
@@ -1225,7 +1442,13 @@ func (m Model) viewList() string {
 	// Lista de segredos
 	total := len(m.filteredItems)
 	if total == 0 {
-		b.WriteString("\n" + dimStyle.Render("  Nenhuma credencial encontrada. Pressione 'n' para adicionar a primeira.") + "\n\n")
+		message := "Nenhuma credencial corresponde aos filtros."
+		if strings.TrimSpace(m.searchInput.Value()) != "" {
+			message = "Nenhuma credencial corresponde à busca."
+		} else if m.vault != nil && m.vault.Count() == 0 {
+			message = "Cofre vazio. Pressione 'n' para adicionar a primeira credencial."
+		}
+		b.WriteString("\n" + dimStyle.Render(wrapHelp([]string{message}, m.helpWidth())) + "\n\n")
 	} else {
 		maxVisible := m.visibleListHeight()
 		start := m.scrollOffset
@@ -1262,9 +1485,9 @@ func (m Model) viewList() string {
 			line := fmt.Sprintf(" %s  %-26s %s", badge, title, dimStyle.Render(loginInfo))
 
 			if i == m.cursor {
-				b.WriteString(selectedItemStyle.Render("▶ " + line) + "\n")
+				b.WriteString(selectedItemStyle.Render("▶ "+line) + "\n")
 			} else {
-				b.WriteString(normalItemStyle.Render("  " + line) + "\n")
+				b.WriteString(normalItemStyle.Render("  "+line) + "\n")
 			}
 		}
 
@@ -1280,11 +1503,7 @@ func (m Model) viewList() string {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("  [Item %d de %d]", m.cursor+1, total)) + "\n")
 	}
 
-	proHelp := "• [p] Upgrade Pro "
-	if isProPlan() {
-		proHelp = "• [p] Status Pro "
-	}
-	b.WriteString(helpStyle.Render("\n[↑/↓/Scroll] Navegar • [PgUp/PgDn] Pular • [Enter] Detalhes • [c] Copiar • [n] Novo • [d] Excluir • [/] Buscar " + proHelp + "• [Tab/Shift+Tab] Filtro • [q] Sair"))
+	b.WriteString(m.listFooter())
 
 	return b.String()
 }
@@ -1306,6 +1525,11 @@ func (m Model) viewDetail() string {
 	} else {
 		for i, f := range entry.Fields {
 			displayVal := f.Value
+			if f.Protected && m.revealed {
+				if err := f.WithValue(func(value []byte) error { displayVal = string(value); return nil }); err != nil {
+					displayVal = "[segredo indisponivel]"
+				}
+			}
 			if f.Protected && !m.revealed {
 				displayVal = "••••••••••••••••"
 			}

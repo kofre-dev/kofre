@@ -55,6 +55,7 @@ func UnlockVaultWithKey(vaultPath string) (*vault.ManagedVault, []byte, []byte, 
 			return nil, nil, nil, fmt.Errorf("falha ao ler entrada segura: %w", err)
 		}
 		secret = strings.TrimSpace(string(bytePass))
+		mycrypto.ZeroBytes(bytePass)
 	}
 
 	if secret == "" {
@@ -88,7 +89,12 @@ func RunExec(cmdArgs []string, filterEntry, vaultPath string) int {
 		return 1
 	}
 
-	envMap := v.ToEnvMap(filterEntry)
+	defer v.Close()
+	envMap, err := v.ToEnvMap(filterEntry)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Erro ao exportar credenciais: %v\n", err)
+		return 1
+	}
 	if len(envMap) == 0 {
 		fmt.Fprintf(os.Stderr, "Aviso: nenhuma variavel de ambiente encontrada no cofre para injetar.\n")
 	}
@@ -142,7 +148,12 @@ func RunShell(ttl time.Duration, filterEntry, vaultPath string) int {
 		return 1
 	}
 
-	envMap := v.ToEnvMap(filterEntry)
+	defer v.Close()
+	envMap, err := v.ToEnvMap(filterEntry)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Erro ao exportar credenciais: %v\n", err)
+		return 1
+	}
 	childEnv := os.Environ()
 	for k, val := range envMap {
 		childEnv = append(childEnv, fmt.Sprintf("%s=%s", k, val))

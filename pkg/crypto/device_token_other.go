@@ -4,6 +4,7 @@ package crypto
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,3 +41,14 @@ func GenerateRandomOTP() string {
 	num := (int(b[0])<<16 | int(b[1])<<8 | int(b[2])) % 900000 + 100000
 	return fmt.Sprintf("%06d", num)
 }
+
+// EncryptWithDPAPI retorna erro em plataformas sem suporte a DPAPI (Windows-only)
+func EncryptWithDPAPI(data []byte) ([]byte, error) {
+	return nil, errors.New("DPAPI is not available on this platform")
+}
+
+// DecryptWithDPAPI retorna erro em plataformas sem suporte a DPAPI (Windows-only)
+func DecryptWithDPAPI(encrypted []byte) ([]byte, error) {
+	return nil, errors.New("DPAPI is not available on this platform")
+}
+

@@ -4,6 +4,9 @@
 *.dll
 *.so
 *.dylib
+*.test
+kofre
+kofre-*
 
 # Dados do cofre, segredos e backups
 vault.enc

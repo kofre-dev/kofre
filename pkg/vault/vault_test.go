@@ -11,7 +11,7 @@ func TestVaultLifecycle(t *testing.T) {
 	v := NewManaged()
 
 	// Adiciona entradas
-	e1 := v.AddEntry(SecretEntry{
+	e1, err := v.AddEntry(SecretEntry{
 		Title:    "AWS Deployer",
 		Category: CategoryToken,
 		Fields: []Field{
@@ -21,7 +21,10 @@ func TestVaultLifecycle(t *testing.T) {
 		Notes: "Chave do bot de CI/CD",
 	})
 
-	e2 := v.AddEntry(SecretEntry{
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2, err := v.AddEntry(SecretEntry{
 		Title:    "Servidor Linux Producao",
 		Category: CategorySSHKey,
 		Fields: []Field{
@@ -31,6 +34,10 @@ func TestVaultLifecycle(t *testing.T) {
 		Notes: "Porta 2222",
 	})
 
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
 	if v.Count() != 2 {
 		t.Fatalf("esperado 2 entradas, obtido %d", v.Count())
 	}

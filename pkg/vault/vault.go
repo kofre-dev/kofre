@@ -22,10 +22,11 @@ var (
 
 // ManagedVault gerencia o cofre em memoria com thread-safety
 type ManagedVault struct {
-	mu    sync.RWMutex
-	data  *Vault
-	salt  []byte
-	dirty bool
+	mu     sync.RWMutex
+	data   *Vault
+	salt   []byte
+	dirty  bool
+	closed bool
 }
 
 // NewManaged cria um cofre gerenciado novo
@@ -36,11 +37,30 @@ func NewManaged() *ManagedVault {
 }
 
 // Wrap cria um cofre gerenciado a partir de dados existentes e salt
-func Wrap(v *Vault, salt []byte) *ManagedVault {
-	return &ManagedVault{
-		data: v,
-		salt: salt,
+func Wrap(v *Vault, salt []byte) (*ManagedVault, error) {
+	mv := NewManaged()
+	mv.salt = append([]byte(nil), salt...)
+	mv.data.SchemaVersion, mv.data.CreatedAt, mv.data.UpdatedAt = v.SchemaVersion, v.CreatedAt, v.UpdatedAt
+	for _, entry := range v.Entries {
+		sealed, err := sealEntry(entry)
+		if err != nil {
+			mv.Close()
+			return nil, err
+		}
+		mv.data.Entries = append(mv.data.Entries, sealed)
 	}
+	return mv, nil
+}
+
+// Close revoga inclusive os handles que já foram entregues para a interface.
+func (mv *ManagedVault) Close() {
+	mv.mu.Lock()
+	defer mv.mu.Unlock()
+	for i := range mv.data.Entries {
+		closeEntry(&mv.data.Entries[i])
+	}
+	mv.data.Entries = nil
+	mv.closed = true
 }
 
 // Entries retorna uma copia de todas as entradas
@@ -49,7 +69,9 @@ func (mv *ManagedVault) Entries() []SecretEntry {
 	defer mv.mu.RUnlock()
 
 	entries := make([]SecretEntry, len(mv.data.Entries))
-	copy(entries, mv.data.Entries)
+	for i, entry := range mv.data.Entries {
+		entries[i] = cloneEntry(entry)
+	}
 	return entries
 }
 
@@ -60,16 +82,24 @@ func (mv *ManagedVault) GetEntry(id string) (SecretEntry, error) {
 
 	for _, e := range mv.data.Entries {
 		if e.ID == id {
-			return e, nil
+			return cloneEntry(e), nil
 		}
 	}
 	return SecretEntry{}, ErrNotFound
 }
 
 // AddEntry adiciona uma nova credencial ao cofre
-func (mv *ManagedVault) AddEntry(entry SecretEntry) SecretEntry {
+func (mv *ManagedVault) AddEntry(entry SecretEntry) (SecretEntry, error) {
 	mv.mu.Lock()
 	defer mv.mu.Unlock()
+	if mv.closed {
+		return SecretEntry{}, errors.New("cofre encerrado")
+	}
+	var err error
+	entry, err = sealEntry(entry)
+	if err != nil {
+		return SecretEntry{}, err
+	}
 
 	now := time.Now()
 	if entry.ID == "" {
@@ -82,7 +112,7 @@ func (mv *ManagedVault) AddEntry(entry SecretEntry) SecretEntry {
 	mv.data.Entries = append(mv.data.Entries, entry)
 	mv.data.UpdatedAt = now
 	mv.dirty = true
-	return entry
+	return cloneEntry(entry), nil
 }
 
 // UpdateEntry atualiza uma credencial existente
@@ -93,9 +123,15 @@ func (mv *ManagedVault) UpdateEntry(entry SecretEntry) error {
 	now := time.Now()
 	for i, e := range mv.data.Entries {
 		if e.ID == entry.ID {
+			var err error
+			entry, err = sealEntry(entry)
+			if err != nil {
+				return err
+			}
 			entry.CreatedAt = e.CreatedAt
 			entry.UpdatedAt = now
 			entry.Version = e.Version + 1
+			closeEntry(&mv.data.Entries[i])
 			mv.data.Entries[i] = entry
 			mv.data.UpdatedAt = now
 			mv.dirty = true
@@ -112,7 +148,10 @@ func (mv *ManagedVault) DeleteEntry(id string) error {
 
 	for i, e := range mv.data.Entries {
 		if e.ID == id {
-			mv.data.Entries = append(mv.data.Entries[:i], mv.data.Entries[i+1:]...)
+			closeEntry(&mv.data.Entries[i])
+			copy(mv.data.Entries[i:], mv.data.Entries[i+1:])
+			mv.data.Entries[len(mv.data.Entries)-1] = SecretEntry{}
+			mv.data.Entries = mv.data.Entries[:len(mv.data.Entries)-1]
 			mv.data.UpdatedAt = time.Now()
 			mv.dirty = true
 			return nil
@@ -135,7 +174,7 @@ func (mv *ManagedVault) Search(query string, category Category) []SecretEntry {
 		}
 
 		if q == "" {
-			results = append(results, e)
+			results = append(results, cloneEntry(e))
 			continue
 		}
 
@@ -157,7 +196,7 @@ func (mv *ManagedVault) Search(query string, category Category) []SecretEntry {
 		}
 
 		if matched {
-			results = append(results, e)
+			results = append(results, cloneEntry(e))
 		}
 	}
 
@@ -191,10 +230,17 @@ func (mv *ManagedVault) Pack(key, salt []byte) ([]byte, error) {
 	mv.mu.RLock()
 	defer mv.mu.RUnlock()
 
-	jsonData, err := json.Marshal(mv.data)
+	if mv.closed {
+		return nil, errors.New("cofre encerrado")
+	}
+	if len(salt) != mycrypto.SaltLength {
+		return nil, errors.New("salt invalido")
+	}
+	jsonData, err := marshalVault(mv.data)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao serializar cofre: %w", err)
 	}
+	defer mycrypto.ZeroBytes(jsonData)
 
 	encrypted, err := mycrypto.Encrypt(jsonData, key)
 	if err != nil {
@@ -236,18 +282,26 @@ func DecryptAndLoad(encryptedPayload, key, salt []byte) (*ManagedVault, error) {
 	defer mycrypto.ZeroBytes(plaintext)
 
 	var v Vault
+	defer func() {
+		for i := range v.Entries {
+			closeEntry(&v.Entries[i])
+		}
+	}()
 	if err := json.Unmarshal(plaintext, &v); err != nil {
 		return nil, fmt.Errorf("falha ao desserializar conteudo do cofre: %w", err)
 	}
 
-	return Wrap(&v, salt), nil
+	return Wrap(&v, salt)
 }
 
 // ToEnvMap converte as credenciais do cofre em um mapa de variaveis de ambiente
 // Se filterTitle for especificado, exporta apenas as chaves daquela credencial especifica
-func (mv *ManagedVault) ToEnvMap(filterTitle string) map[string]string {
+func (mv *ManagedVault) ToEnvMap(filterTitle string) (map[string]string, error) {
 	mv.mu.RLock()
 	defer mv.mu.RUnlock()
+	if mv.closed {
+		return nil, errors.New("cofre encerrado")
+	}
 
 	envMap := make(map[string]string)
 	filter := strings.ToLower(strings.TrimSpace(filterTitle))
@@ -262,20 +316,24 @@ func (mv *ManagedVault) ToEnvMap(filterTitle string) map[string]string {
 		// Se a credencial tiver campos estruturados
 		for _, f := range entry.Fields {
 			fName := SanitizeEnvKey(f.Name)
+			var value string
+			if err := f.WithValue(func(raw []byte) error { value = string(raw); return nil }); err != nil {
+				return nil, err
+			}
 
 			// Se o campo ja tem cara de ENV (ex: AWS_ACCESS_KEY_ID ou OPENAI_API_KEY)
 			if strings.Contains(fName, "_") || strings.ToUpper(f.Name) == f.Name {
-				envMap[fName] = f.Value
+				envMap[fName] = value
 				continue
 			}
 
 			// Se for um campo generico ("token", "senha", "key") de uma credencial
 			if f.Protected || strings.EqualFold(f.Name, "token") || strings.EqualFold(f.Name, "secret") || strings.EqualFold(f.Name, "senha") {
-				envMap[cleanTitle] = f.Value
+				envMap[cleanTitle] = value
 			} else {
 				// Combina Titulo + Nome do Campo (ex: BANCO_PROD_USUARIO)
 				combinedKey := cleanTitle + "_" + fName
-				envMap[combinedKey] = f.Value
+				envMap[combinedKey] = value
 			}
 		}
 
@@ -285,7 +343,7 @@ func (mv *ManagedVault) ToEnvMap(filterTitle string) map[string]string {
 		}
 	}
 
-	return envMap
+	return envMap, nil
 }
 
 // SanitizeEnvKey normaliza um texto para o padrao de variavel de ambiente (UPPERCASE_WITH_UNDERSCORES)

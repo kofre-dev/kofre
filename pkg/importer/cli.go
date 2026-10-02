@@ -74,9 +74,12 @@ func RunInteractiveImport(srcTxtPath, vaultPath string, store storage.StoragePro
 		return fmt.Errorf("falha ao abrir cofre: %w", err)
 	}
 	defer mycrypto.ZeroBytes(key)
+	defer v.Close()
 
 	for _, e := range entries {
-		v.AddEntry(e)
+		if _, err := v.AddEntry(e); err != nil {
+			return fmt.Errorf("falha ao proteger entrada importada: %w", err)
+		}
 	}
 
 	// Empacota e salva

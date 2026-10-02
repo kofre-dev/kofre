@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -84,19 +83,7 @@ func copyFile(src, dst string) error {
 
 func addToUserPath(dir string) error {
 	if runtime.GOOS == "windows" {
-		// Comando PowerShell seguro para adicionar ao PATH do Usuario sem precisar de admin
-		psScript := fmt.Sprintf(`
-$dir = '%s'
-$path = [Environment]::GetEnvironmentVariable('Path', [EnvironmentVariableTarget]::User)
-$items = $path -split ';' | Where-Object { $_ -ne '' }
-if ($items -notcontains $dir) {
-    $newPath = ($items + $dir) -join ';'
-    [Environment]::SetEnvironmentVariable('Path', $newPath, [EnvironmentVariableTarget]::User)
-}
-`, dir)
-
-		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
-		return cmd.Run()
+		return updateWindowsPath(dir, true)
 	}
 
 	// Linux / macOS: verifica ~/.bashrc ou ~/.zshrc

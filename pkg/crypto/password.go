@@ -15,8 +15,18 @@ const (
 
 // GenerateSecurePassword gera uma senha forte com entropia criptografica
 func GenerateSecurePassword(length int) string {
+	result := GenerateSecurePasswordBytes(length)
+	defer ZeroBytes(result)
+	return string(result)
+}
+
+// GenerateSecurePasswordBytes entrega ao chamador um buffer que pode ser apagado.
+func GenerateSecurePasswordBytes(length int) []byte {
 	if length <= 0 {
 		length = 24
+	}
+	if length < 4 {
+		length = 4
 	}
 
 	result := make([]byte, length)
@@ -38,7 +48,7 @@ func GenerateSecurePassword(length int) string {
 		result[i], result[j] = result[j], result[i]
 	}
 
-	return string(result)
+	return result
 }
 
 func randomChar(charset string) byte {
