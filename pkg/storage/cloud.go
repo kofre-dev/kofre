@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"kofre/pkg/config"
 )
 
 // KofreCloudStorage implementa a sincronização gerenciada através da API oficial do Kofre Cloud
@@ -19,7 +21,7 @@ type KofreCloudStorage struct {
 
 func NewKofreCloudStorage(endpoint, token string) *KofreCloudStorage {
 	if endpoint == "" {
-		endpoint = "https://api.kofre.dev"
+		endpoint = config.GetCloudEndpoint()
 	}
 	endpoint = strings.TrimRight(endpoint, "/")
 	return &KofreCloudStorage{

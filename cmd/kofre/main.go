@@ -295,10 +295,7 @@ func handleLogin(args []string) {
 		cfg = config.DefaultConfig()
 	}
 
-	endpoint := cfg.CloudEndpoint
-	if endpoint == "" {
-		endpoint = "https://kofre-api-production.up.railway.app"
-	}
+	endpoint := config.GetCloudEndpoint()
 
 	if len(args) == 0 {
 		handleTelegramReverseLogin(cfg, endpoint)
@@ -506,15 +503,9 @@ func resolveCloudOrS3Storage(cfg *config.AppConfig) (storage.StorageProvider, er
 		return nil, fmt.Errorf("configuração não encontrada")
 	}
 
-	// 1. Modo Kofre Cloud (Railway SaaS)
+	// 1. Modo Kofre Cloud
 	if cfg.Mode == "kofre_cloud" || (cfg.CloudEnabled && cfg.KofreToken != "") {
-		endpoint := cfg.CloudEndpoint
-		if endpoint == "" {
-			endpoint = os.Getenv("KOFRE_CLOUD_ENDPOINT")
-		}
-		if endpoint == "" {
-			endpoint = "https://api.kofre.dev"
-		}
+		endpoint := config.GetCloudEndpoint()
 		return storage.NewKofreCloudStorage(endpoint, cfg.KofreToken), nil
 	}
 
@@ -650,12 +641,7 @@ func resolveVaultPath(flagVal string) string {
 }
 
 func tryAutoUpdateOnBoot() {
-	cfg, _ := config.LoadConfig()
-	endpoint := "https://kofre-api-production.up.railway.app"
-	if cfg != nil && cfg.CloudEndpoint != "" {
-		endpoint = cfg.CloudEndpoint
-	}
-
+	endpoint := config.GetCloudEndpoint()
 	updated, err := updater.AutoUpdate(endpoint, true)
 	if err == nil && updated {
 		fmt.Println("🚀 O Kofre foi atualizado para a versão mais recente! Reiniciando...")
@@ -664,12 +650,7 @@ func tryAutoUpdateOnBoot() {
 }
 
 func handleUpdate() {
-	cfg, _ := config.LoadConfig()
-	endpoint := "https://kofre-api-production.up.railway.app"
-	if cfg != nil && cfg.CloudEndpoint != "" {
-		endpoint = cfg.CloudEndpoint
-	}
-
+	endpoint := config.GetCloudEndpoint()
 	fmt.Printf("🔍 Verificando atualizações em %s...\n", endpoint)
 	updated, err := updater.AutoUpdate(endpoint, false)
 	if err != nil {
@@ -687,10 +668,7 @@ func handlePro() {
 		cfg = config.DefaultConfig()
 	}
 
-	endpoint := cfg.CloudEndpoint
-	if endpoint == "" {
-		endpoint = "https://kofre-api-production.up.railway.app"
-	}
+	endpoint := config.GetCloudEndpoint()
 
 	fmt.Println("🚀 Ativando Kofre Cloud Pro (Modo Piloto)...")
 	provisionURL := fmt.Sprintf("%s/v1/auth/provision", strings.TrimRight(endpoint, "/"))
@@ -758,10 +736,7 @@ func handleTelegramLink() {
 		os.Exit(1)
 	}
 
-	endpoint := cfg.CloudEndpoint
-	if endpoint == "" {
-		endpoint = "https://kofre-api-production.up.railway.app"
-	}
+	endpoint := config.GetCloudEndpoint()
 	url := fmt.Sprintf("%s/v1/telegram/link-request", strings.TrimRight(endpoint, "/"))
 
 	req, err := http.NewRequest(http.MethodPost, url, nil)

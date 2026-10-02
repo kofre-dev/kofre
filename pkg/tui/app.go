@@ -203,11 +203,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.err = fmt.Errorf("tempo limite do desafio expirou")
 				return m, nil
 			}
-			cfg, _ := config.LoadConfig()
-			ep := "https://kofre-api-production.up.railway.app"
-			if cfg != nil && cfg.CloudEndpoint != "" {
-				ep = cfg.CloudEndpoint
-			}
+			ep := config.GetCloudEndpoint()
 			return m, m.pollChallengeStatus(m.challengeID, ep)
 		}
 
@@ -345,10 +341,7 @@ func (m *Model) startTelegramChallenge() (tea.Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	endpoint := cfg.CloudEndpoint
-	if endpoint == "" {
-		endpoint = "https://kofre-api-production.up.railway.app"
-	}
+	endpoint := config.GetCloudEndpoint()
 
 	url := fmt.Sprintf("%s/v1/auth/telegram-challenge", strings.TrimRight(endpoint, "/"))
 	req, err := http.NewRequest(http.MethodPost, url, nil)
@@ -442,11 +435,7 @@ func (m Model) updateTelegramChallenge(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		cfg, _ := config.LoadConfig()
-		ep := "https://kofre-api-production.up.railway.app"
-		if cfg != nil && cfg.CloudEndpoint != "" {
-			ep = cfg.CloudEndpoint
-		}
+		ep := config.GetCloudEndpoint()
 
 		url := fmt.Sprintf("%s/v1/auth/telegram-challenge/verify", strings.TrimRight(ep, "/"))
 		body, _ := json.Marshal(map[string]string{
@@ -1060,10 +1049,7 @@ func (m Model) activateProPlan() (tea.Model, tea.Cmd) {
 		cfg = config.DefaultConfig()
 	}
 
-	endpoint := cfg.CloudEndpoint
-	if endpoint == "" {
-		endpoint = "https://kofre-api-production.up.railway.app"
-	}
+	endpoint := config.GetCloudEndpoint()
 
 	provisionURL := fmt.Sprintf("%s/v1/auth/provision", strings.TrimRight(endpoint, "/"))
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -1209,7 +1195,7 @@ func (m Model) viewTelegramChallenge() string {
 	timeStr := fmt.Sprintf("%02d:%02d", mins, secs)
 
 	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("📱 Autenticação / Recuperação via Telegram\n"))
-	b.WriteString("Enviamos uma solicitação para o seu bot @kofredev_bot no Telegram.\n\n")
+	b.WriteString(fmt.Sprintf("Enviamos uma solicitação para o seu bot @%s no Telegram.\n\n", config.GetTelegramBot()))
 	b.WriteString("Opção 1: Toque em ")
 	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("[ ✅ Autorizar Desbloqueio ]"))
 	b.WriteString(" no seu celular.\n")
@@ -1404,7 +1390,7 @@ func (m Model) viewPro() string {
 		b.WriteString("Status:           " + lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("ATIVO (PILOTO)") + "\n")
 		b.WriteString(fmt.Sprintf("Licença:          %s\n", tokenDisplay))
 		b.WriteString("Sincronização:    Nuvem S3 Criptografada (Zero-Knowledge E2EE)\n")
-		b.WriteString("Bot Telegram:     @kofredev_bot (Alertas e Desbloqueio com Timeout)\n\n")
+		b.WriteString(fmt.Sprintf("Bot Telegram:     @%s (Alertas e Desbloqueio com Timeout)\n\n", config.GetTelegramBot()))
 		b.WriteString("Seu cofre está protegido e sincronizado continuamente com a nuvem.\n\n")
 		b.WriteString(helpStyle.Render("[Enter / Esc] Voltar"))
 	} else {
@@ -1415,7 +1401,7 @@ func (m Model) viewPro() string {
 		b.WriteString("Desbloqueie o poder máximo do seu cofre:\n\n")
 		b.WriteString("  ✓ Sincronização em nuvem Zero-Knowledge (criptografado no cliente)\n")
 		b.WriteString("  ✓ Acesso contínuo e sincronizado entre seus múltiplos computadores\n")
-		b.WriteString("  ✓ Desbloqueio e recuperação remota via Telegram com Timeout (@kofredev_bot)\n")
+		b.WriteString(fmt.Sprintf("  ✓ Desbloqueio e recuperação remota via Telegram com Timeout (@%s)\n", config.GetTelegramBot()))
 		b.WriteString("  ✓ Botão de Pânico no Telegram para blindagem ou bloqueio imediato\n")
 		b.WriteString("  ✓ Backups versionados contínuos no S3\n\n")
 

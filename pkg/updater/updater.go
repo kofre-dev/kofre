@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"kofre/pkg/config"
 )
 
 // CurrentVersion define a versão atual compilada do binário do Kofre
@@ -43,7 +45,7 @@ func CurrentPlatform() string {
 // CheckForUpdate consulta a API do Kofre para verificar se há versão mais recente
 func CheckForUpdate(endpoint string) (*ReleaseMetadata, bool, error) {
 	if endpoint == "" {
-		endpoint = "https://kofre-api-production.up.railway.app"
+		endpoint = config.GetCloudEndpoint()
 	}
 	endpoint = strings.TrimRight(endpoint, "/")
 
@@ -151,7 +153,7 @@ func AutoUpdate(endpoint string, silent bool) (bool, error) {
 	downloadURL := platInfo.URL
 	if !strings.HasPrefix(downloadURL, "http://") && !strings.HasPrefix(downloadURL, "https://") {
 		if endpoint == "" {
-			endpoint = "https://kofre-api-production.up.railway.app"
+			endpoint = config.GetCloudEndpoint()
 		}
 		downloadURL = strings.TrimRight(endpoint, "/") + "/" + strings.TrimLeft(downloadURL, "/")
 	}

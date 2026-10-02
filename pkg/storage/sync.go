@@ -11,7 +11,7 @@ import (
 // SyncStorage combina o armazenamento local com a nuvem (Kofre Cloud ou S3 próprio).
 // Ele garante um design offline-first ultra rápido:
 // 1. Qualquer criação, edição ou exclusão de credencial é gravada localmente de forma atômica e instantânea (< 1ms).
-// 2. A sincronização com a nuvem (S3/Railway) roda em segundo plano (background worker assíncrono).
+// 2. A sincronização com a nuvem (S3/Kofre Cloud) roda em segundo plano (background worker assíncrono).
 // 3. Modificações em sequência são automaticamente agrupadas (coalescing), evitando requisições HTTP desnecessárias.
 // 4. Ao sair da aplicação, o Flush garante que a última versão pendente seja enviada.
 type SyncStorage struct {
