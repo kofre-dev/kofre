@@ -24,8 +24,7 @@ var (
 	headerBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorAccent).
-			Padding(0, 1).
-			MarginBottom(1)
+			Padding(0, 1)
 
 	statusBadgeStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#FFFFFF")).
@@ -36,8 +35,7 @@ var (
 	searchStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), false, false, true, false).
 			BorderForeground(colorBorder).
-			Foreground(colorText).
-			MarginBottom(1)
+			Foreground(colorText)
 
 	selectedItemStyle = lipgloss.NewStyle().
 				Background(colorSelected).

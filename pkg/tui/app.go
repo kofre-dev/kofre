@@ -507,16 +507,16 @@ func (m Model) finishTelegramUnlock() (tea.Model, tea.Cmd) {
 func (m Model) visibleListHeight() int {
 	h := m.height
 	if h <= 0 {
-		return 15
+		return 10
 	}
-	// Desconta: Header (4) + Box borders (4) + Tabs (2) + Search (2) + Footer (3) + Notif (2)
-	overhead := 13
+	// Desconta: Header (3) + Tabs (2) + Search (1) + Spacers e Indicadores (3) + Footer (3) + Margem de segurança (3)
+	overhead := 15
 	if m.notification != "" || m.err != nil {
 		overhead += 2
 	}
 	avail := h - overhead
-	if avail < 5 {
-		return 5
+	if avail < 4 {
+		return 4
 	}
 	return avail
 }
