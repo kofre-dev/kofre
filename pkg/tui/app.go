@@ -20,6 +20,7 @@ import (
 	"kofre/pkg/config"
 	mycrypto "kofre/pkg/crypto"
 	"kofre/pkg/storage"
+	"kofre/pkg/updater"
 	"kofre/pkg/vault"
 )
 
@@ -1462,6 +1463,7 @@ func (m Model) renderHeader() string {
 	}
 
 	title := titleStyle.Render(" Kofre ")
+	versionBadge := dimStyle.Render("v" + updater.CurrentVersion)
 	status := statusBadgeStyle.Render(lockText)
 
 	planBadge := dimStyle.Render("[FREE]")
@@ -1469,7 +1471,7 @@ func (m Model) renderHeader() string {
 		planBadge = badgeToken.Render("★ PRO")
 	}
 
-	header := fmt.Sprintf("%s  %s  %s", title, planBadge, status)
+	header := fmt.Sprintf("%s %s  %s  %s", title, versionBadge, planBadge, status)
 	if isUnlocked && m.vault != nil {
 		countBadge := badgeSSH.Render(fmt.Sprintf("%d segredos", m.vault.Count()))
 		header = fmt.Sprintf("%s  %s", header, countBadge)
