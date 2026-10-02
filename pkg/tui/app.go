@@ -462,11 +462,11 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		// Provisiona silenciosamente o envelope do Telegram para futuros desbloqueios sem senha
 		if cfg, _ := config.LoadConfig(); cfg != nil && cfg.CloudEnabled && cfg.KofreToken != "" {
+			keyCopy := append([]byte(nil), key...)
 			go func(k []byte, tok, ep string) {
-				keyCopy := append([]byte(nil), k...)
-				defer mycrypto.ZeroBytes(keyCopy)
-				_ = mycrypto.SaveTelegramUnlockEnvelope(keyCopy, tok, ep)
-			}(key, cfg.KofreToken, config.GetCloudEndpoint())
+				defer mycrypto.ZeroBytes(k)
+				_ = mycrypto.SaveTelegramUnlockEnvelope(k, tok, ep)
+			}(keyCopy, cfg.KofreToken, config.GetCloudEndpoint())
 		}
 
 		return m, m.notify("✓ Cofre desbloqueado em memoria RAM")
@@ -668,7 +668,13 @@ func (m Model) finishTelegramUnlock(unlockSecret string) (tea.Model, tea.Cmd) {
 	m.isNewVault = false
 	m.err = nil
 	m.passInput.Focus()
-	return m, m.notify("✓ Aprovado no Telegram! Digite sua senha mestre uma vez para salvar o acesso rápido.")
+	if !mycrypto.HasTelegramUnlockEnvelope() {
+		return m, m.notify("✓ Aprovado no Telegram! Digite sua senha mestre uma vez para vincular o acesso rápido.")
+	}
+	if unlockSecret == "" {
+		return m, m.notify("⚠️ Servidor não retornou chave remota. Digite sua senha mestre.")
+	}
+	return m, m.notify("⚠️ Falha ao decifrar com envelope local. Digite sua senha mestre.")
 }
 
 // ======================== TELA LISTA ========================

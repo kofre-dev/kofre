@@ -35,8 +35,8 @@ func printHelp() {
   kofre install           Instala no seu sistema e adiciona ao PATH do terminal
   kofre uninstall         Desinstala o aplicativo, preservando o vault (ou --uninstall)
   kofre config            Assistente interativo de configuração (S3, Cloud, Telegram)
-  kofre login <token>     Conecta sua licença Kofre Cloud Pro para sync automático
   kofre telegram          Vincula seu cofre ao Bot do Telegram (Alertas e Pânico)
+  kofre telegram unlock   Configura o desbloqueio instantâneo pelo celular (sem senha)
   kofre push              Envia o cofre local criptografado para o S3 / Cloud
   kofre pull              Baixa o cofre mais recente do S3 / Cloud para o PC
   kofre import <txt>      Importador inteligente de arquivos .txt desformatados
@@ -138,6 +138,10 @@ func main() {
 			return
 
 		case "telegram", "tg":
+			if len(os.Args) > 2 && (os.Args[2] == "unlock" || os.Args[2] == "setup" || os.Args[2] == "envelope" || os.Args[2] == "sync") {
+				handleTelegramSetupUnlock()
+				return
+			}
 			handleTelegramLink()
 			return
 
@@ -806,6 +810,58 @@ func handleTelegramLink() {
 	fmt.Println("1. Abra o link direto no seu Telegram:")
 	fmt.Printf("   👉 %s\n\n", res.LinkURL)
 	fmt.Println("2. Ou envie o código abaixo diretamente para o bot @" + res.Bot + ":")
-	fmt.Printf("   Código: %s  (Válido por %s)\n\n", res.Code, res.Expires)
 	fmt.Println("Após tocar em 'Iniciar' ou enviar o código, seu Telegram estará conectado.")
+	fmt.Println()
+	fmt.Println("Dica: Para ativar o desbloqueio rápido sem senha, execute 'kofre telegram unlock'.")
 }
+
+func handleTelegramSetupUnlock() {
+	cfg, _ := config.LoadConfig()
+	if cfg == nil || !cfg.CloudEnabled || cfg.KofreToken == "" {
+		fmt.Fprintln(os.Stderr, "Erro: você precisa estar conectado ao Kofre Cloud para ativar o desbloqueio por Telegram.")
+		fmt.Fprintln(os.Stderr, "Execute primeiro: kofre login <seu-token>")
+		os.Exit(1)
+	}
+
+	vaultPath := resolveVaultPath("")
+	if _, err := os.Stat(vaultPath); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Erro: arquivo de cofre não encontrado em %s\n", vaultPath)
+		os.Exit(1)
+	}
+
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║  Kofre 🔐 Ativação de Desbloqueio Instantâneo via Telegram   ║")
+	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+	fmt.Println("Esta operação configura o envelope criptográfico de Chave Dividida (Split-Key):")
+	fmt.Println("  • Uma metade fica no seu computador (protegida com DPAPI do Windows).")
+	fmt.Println("  • A outra metade fica no Kofre Cloud, liberada apenas quando você aprova no Telegram.")
+	fmt.Println("  • O cofre só pode ser aberto quando as duas metades se unem na memória RAM.")
+	fmt.Println()
+
+	v, key, _, err := runner.UnlockVaultWithKey(vaultPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Erro ao validar cofre: %v\n", err)
+		os.Exit(1)
+	}
+	v.Close()
+	defer mycrypto.ZeroBytes(key)
+
+	endpoint := config.GetCloudEndpoint()
+	fmt.Println("Gerando chaves criptográficas e registrando no Kofre Cloud...")
+	if err := mycrypto.SaveTelegramUnlockEnvelope(key, cfg.KofreToken, endpoint); err != nil {
+		fmt.Fprintf(os.Stderr, "Erro ao configurar envelope: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println()
+	fmt.Println("✓ Desbloqueio rápido por Telegram configurado com SUCESSO neste computador!")
+	fmt.Println()
+	fmt.Println("Como usar agora:")
+	fmt.Println("  1. Abra o Kofre executando 'kofre.exe'")
+	fmt.Println("  2. Pressione [Ctrl+T]")
+	fmt.Println("  3. Toque em [ ✅ Autorizar Desbloqueio ] no Telegram do seu celular")
+	fmt.Println("  4. O Kofre abrirá IMEDIATAMENTE na sua lista de segredos sem pedir senha!")
+}
+
