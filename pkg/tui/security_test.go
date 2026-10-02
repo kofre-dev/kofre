@@ -256,3 +256,44 @@ func TestUnlockClearsMasterAndAcceptsLetters(t *testing.T) {
 		t.Fatalf("reabertura falhou: %v", m.err)
 	}
 }
+
+func TestViewDetailNeverExposesProtectedSecret(t *testing.T) {
+	m := fixtureModel(t)
+	canary := "CANARY_10891089"
+	e, err := m.vault.AddEntry(vault.SecretEntry{
+		Title: "EntradaTeste",
+		Fields: []vault.Field{
+			{Name: "Usuario", Value: "teste@teste"},
+			{Name: "Segredo", Value: canary, Protected: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.selectedEntry = e
+	m.state = ViewDetail
+	m.detailCursor = 1 // Cursor no campo 'Segredo'
+
+	// 1. Verifica que a ViewDetail mascara o segredo e nao o materializa no view
+	view := m.viewDetail()
+	if bytes.Contains([]byte(view), []byte(canary)) {
+		t.Fatal("FALHA: viewDetail expos o segredo em claro no buffer de renderizacao!")
+	}
+	if !bytes.Contains([]byte(view), []byte("••••••••••••••••")) {
+		t.Fatal("FALHA: campo protegido nao foi mascarado na view")
+	}
+
+	// 2. Acionar 'v' lanca o comando efemero isolado e NAO injeta a senha na view regular
+	next, cmd := m.updateDetail(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("esperava comando efemero ao pressionar 'v'")
+	}
+
+	viewAfterV := m.viewDetail()
+	if bytes.Contains([]byte(viewAfterV), []byte(canary)) {
+		t.Fatal("FALHA: viewDetail expos segredo apos pressionar 'v'!")
+	}
+}
+

@@ -11,18 +11,63 @@ import (
 
 var (
 	modkernel32       = windows.NewLazySystemDLL("kernel32.dll")
+	modadvapi32       = windows.NewLazySystemDLL("advapi32.dll")
 	procVirtualLock   = modkernel32.NewProc("VirtualLock")
 	procVirtualUnlock = modkernel32.NewProc("VirtualUnlock")
+	procLocalFree     = modkernel32.NewProc("LocalFree")
+
+	procConvertStringSDToSD = modadvapi32.NewProc("ConvertStringSecurityDescriptorToSecurityDescriptorW")
+	procSetKernelObjectSec  = modadvapi32.NewProc("SetKernelObjectSecurity")
 )
 
-// ProtectProcess desativa diálogos de erro. Não impede ReadProcessMemory ou dumps.
+// ProtectProcess blinda o processo Windows aplicando um DACL restritivo no kernel object
+// que nega explicitamente PROCESS_VM_READ, PROCESS_VM_WRITE, PROCESS_VM_OPERATION,
+// PROCESS_CREATE_THREAD, PROCESS_DUP_HANDLE e PROCESS_QUERY_INFORMATION (0x410)
+// para outros processos locais (incluindo dumpers de memoria e anexadores de console).
 func ProtectProcess() {
-	// Evita diálogos de erro; não constitui isolamento de memória.
-	// SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
+	// 1. Desativa dialogos de erro e crash dumps automaticos
 	const semFlags = 0x0001 | 0x0002
 	procSetErrorMode := modkernel32.NewProc("SetErrorMode")
 	if procSetErrorMode.Find() == nil {
 		_, _, _ = procSetErrorMode.Call(uintptr(semFlags))
+	}
+
+	// 2. Aplica DACL restritivo no processo atual:
+	// Deny (WD - Everyone):
+	//   PROCESS_CREATE_THREAD (0x0002)
+	//   PROCESS_VM_OPERATION  (0x0008)
+	//   PROCESS_VM_READ       (0x0010)
+	//   PROCESS_VM_WRITE      (0x0020)
+	//   PROCESS_DUP_HANDLE    (0x0040)
+	//   PROCESS_QUERY_INFO    (0x0400)
+	//   Total negado: 0x47A
+	// Allow (WD - Everyone):
+	//   PROCESS_TERMINATE     (0x0001)
+	//   PROCESS_QUERY_LIMITED (0x1000)
+	//   SYNCHRONIZE           (0x100000)
+	//   Total permitido: 0x101001
+	sddlStr, err := windows.UTF16PtrFromString("D:P(D;;0x47A;;;WD)(A;;0x101001;;;WD)")
+	if err != nil {
+		return
+	}
+
+	var pSd uintptr
+	var sdSize uint32
+	r1, _, _ := procConvertStringSDToSD.Call(
+		uintptr(unsafe.Pointer(sddlStr)),
+		1, // SDDL_REVISION_1
+		uintptr(unsafe.Pointer(&pSd)),
+		uintptr(unsafe.Pointer(&sdSize)),
+	)
+	if r1 != 0 && pSd != 0 {
+		const daclSecInfo = 4 // DACL_SECURITY_INFORMATION
+		currProc := windows.CurrentProcess()
+		_, _, _ = procSetKernelObjectSec.Call(
+			uintptr(currProc),
+			uintptr(daclSecInfo),
+			pSd,
+		)
+		_, _, _ = procLocalFree.Call(pSd)
 	}
 }
 

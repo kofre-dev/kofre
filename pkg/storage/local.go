@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	mycrypto "kofre/pkg/crypto"
 )
 
 // LocalStorage implementa o armazenamento em arquivo local
@@ -70,6 +72,8 @@ func (l *LocalStorage) Save(ctx context.Context, data []byte) error {
 			return fmt.Errorf("falha ao substituir arquivo do cofre: %w", err)
 		}
 	}
+
+	_ = mycrypto.RestrictFilePermissions(l.filePath)
 
 	return nil
 }

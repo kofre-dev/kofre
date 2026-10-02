@@ -157,7 +157,11 @@ func SaveConfig(cfg *AppConfig) error {
 		return err
 	}
 
-	return os.WriteFile(cfgPath, data, 0600)
+	if err := os.WriteFile(cfgPath, data, 0600); err != nil {
+		return err
+	}
+	_ = mycrypto.RestrictFilePermissions(cfgPath)
+	return nil
 }
 
 // DefaultConfig gera a configuracao padrao inicial

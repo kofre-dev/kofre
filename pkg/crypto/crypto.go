@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
+	"unsafe"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -97,3 +99,17 @@ func Decrypt(payload, key []byte) ([]byte, error) {
 func ZeroBytes(b []byte) {
 	WipeBytes(b)
 }
+
+// WipeString sobrescreve os bytes de uma string alocada no heap com zeros de forma imune a otimizacoes
+func WipeString(s string) {
+	if len(s) == 0 {
+		return
+	}
+	p := unsafe.StringData(s)
+	b := unsafe.Slice(p, len(s))
+	for i := range b {
+		b[i] = 0
+	}
+	runtime.KeepAlive(b)
+}
+

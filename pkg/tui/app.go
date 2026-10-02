@@ -250,6 +250,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.pollChallengeStatus(m.challengeID, ep)
 		}
 
+	case ephemeralRevealDoneMsg:
+		m.revealed = false
+		return m, nil
 	case clearNotifMsg:
 		m.notification = ""
 	case securityTickMsg:
@@ -905,8 +908,12 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "v", " ":
-		m.revealed = !m.revealed
-		m.revealUntil = time.Now().Add(15 * time.Second)
+		if len(m.selectedEntry.Fields) > 0 && m.detailCursor < len(m.selectedEntry.Fields) {
+			field := m.selectedEntry.Fields[m.detailCursor]
+			if field.Protected {
+				return m, m.revealFieldEphemeral(field, m.selectedEntry.Title)
+			}
+		}
 		return m, nil
 
 	case "up", "k":
@@ -1525,12 +1532,7 @@ func (m Model) viewDetail() string {
 	} else {
 		for i, f := range entry.Fields {
 			displayVal := f.Value
-			if f.Protected && m.revealed {
-				if err := f.WithValue(func(value []byte) error { displayVal = string(value); return nil }); err != nil {
-					displayVal = "[segredo indisponivel]"
-				}
-			}
-			if f.Protected && !m.revealed {
+			if f.Protected {
 				displayVal = "••••••••••••••••"
 			}
 
