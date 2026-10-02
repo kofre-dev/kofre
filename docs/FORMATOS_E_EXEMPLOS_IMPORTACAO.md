@@ -87,7 +87,7 @@ O formato JSON é altamente legível e seguro para chaves que possuem quebras de
   {
     "title": "GitHub Deploy",
     "category": "token",
-    "username": "solivansoft",
+    "username": "dev_deploy",
     "password": "ghp_exemploTokenSecreto12345",
     "url": "https://github.com",
     "notes": "Token de deploy CI/CD"
@@ -129,7 +129,7 @@ Se preferir manter suas credenciais em arquivo de texto plano (`.txt` ou `.md`),
 ```txt
 === GitHub Deploy ===
 Categoria: token
-Usuario: solivansoft
+Usuario: dev_deploy
 Senha: ghp_exemploTokenSecreto12345
 URL: https://github.com
 Notas: Token de deploy CI/CD

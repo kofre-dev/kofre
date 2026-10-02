@@ -64,15 +64,15 @@ O arquivo gravado no disco e no S3 possui a seguinte estrutura binária inviolá
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Solivan as Solivan (Terminal Local)
+    actor Dev as Desenvolvedor (Terminal Local)
     participant Client as kofre.exe
-    participant API as kofred (Railway Gateway)
-    participant S3 as AWS S3 (sa-east-1)
-    actor TG as Solivan (Telegram)
-    participant Bot as @kofredev_bot
+    participant API as kofre-cloud (Gateway)
+    participant S3 as AWS S3 / Cloudflare R2
+    actor TG as Usuário (Telegram)
+    participant Bot as Bot Telegram Gatekeeper
 
-    Note over Solivan, S3: 1. Sincronização Contínua (Auto-Sync)
-    Solivan->>Client: Cria, Edita ou Exclui Senha
+    Note over Dev, S3: 1. Sincronização Contínua (Auto-Sync)
+    Dev->>Client: Cria, Edita ou Exclui Senha
     Client->>Client: 1. Grava no disco local (vault.enc)
     Client->>API: 2. PUT /v1/vault (Blob Criptografado + Token)
     API->>API: Verifica se o cofre está em PanicLock
@@ -80,13 +80,13 @@ sequenceDiagram
     API->>Bot: Dispara notificação silenciosa
     Bot-->>TG: 🔄 "Cofre sincronizado com sucesso!"
 
-    Note over Solivan, S3: 2. Nova Máquina ou Restauração
-    Solivan->>Client: kofre login <token>
+    Note over Dev, S3: 2. Nova Máquina ou Restauração
+    Dev->>Client: kofre login <token>
     Client->>API: GET /v1/vault
     API->>S3: Recupera vaults/{userID}/vault.enc
     API-->>Client: Devolve blob criptografado
     Client->>Client: Grava vault.enc local
-    Solivan->>Client: Digita Master Password no terminal
+    Dev->>Client: Digita Master Password no terminal
     Client->>Client: Decifra na RAM e abre TUI
 ```
 
