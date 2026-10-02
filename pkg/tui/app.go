@@ -250,6 +250,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.pollChallengeStatus(m.challengeID, ep)
 		}
 
+	case telegramEnvelopeSavedMsg:
+		if msg.err == nil {
+			return m, m.notify("✓ Desbloqueio direto por Telegram ATIVADO! Acesso sem senha liberado.")
+		}
+		return m, nil
 	case ephemeralRevealDoneMsg:
 		m.revealed = false
 		return m, nil
@@ -270,6 +275,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+type telegramEnvelopeSavedMsg struct{ err error }
+
+func saveTelegramEnvelopeCmd(key []byte, token, endpoint string) tea.Cmd {
+	return func() tea.Msg {
+		defer mycrypto.ZeroBytes(key)
+		err := mycrypto.SaveTelegramUnlockEnvelope(key, token, endpoint)
+		return telegramEnvelopeSavedMsg{err: err}
+	}
 }
 
 type clearNotifMsg struct{}
@@ -460,16 +475,24 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.refreshList()
 
-		// Provisiona silenciosamente o envelope do Telegram para futuros desbloqueios sem senha
+		// Provisiona o envelope do Telegram para futuros desbloqueios sem senha
+		var unlockCmd tea.Cmd = m.notify("✓ Cofre desbloqueado em memoria RAM")
 		if cfg, _ := config.LoadConfig(); cfg != nil && cfg.CloudEnabled && cfg.KofreToken != "" {
 			keyCopy := append([]byte(nil), key...)
-			go func(k []byte, tok, ep string) {
-				defer mycrypto.ZeroBytes(k)
-				_ = mycrypto.SaveTelegramUnlockEnvelope(k, tok, ep)
-			}(keyCopy, cfg.KofreToken, config.GetCloudEndpoint())
+			if !mycrypto.HasTelegramUnlockEnvelope() {
+				unlockCmd = tea.Batch(
+					m.notify("✓ Cofre aberto! Ativando desbloqueio rápido por Telegram..."),
+					saveTelegramEnvelopeCmd(keyCopy, cfg.KofreToken, config.GetCloudEndpoint()),
+				)
+			} else {
+				go func(k []byte, tok, ep string) {
+					defer mycrypto.ZeroBytes(k)
+					_ = mycrypto.SaveTelegramUnlockEnvelope(k, tok, ep)
+				}(keyCopy, cfg.KofreToken, config.GetCloudEndpoint())
+			}
 		}
 
-		return m, m.notify("✓ Cofre desbloqueado em memoria RAM")
+		return m, unlockCmd
 
 	case tea.KeyCtrlP:
 		m.previousState = m.state
@@ -666,15 +689,17 @@ func (m Model) finishTelegramUnlock(unlockSecret string) (tea.Model, tea.Cmd) {
 	// 2. Se o envelope ainda não foi salvo nesta máquina, pede a senha mestre uma única vez para salvar
 	m.state = ViewUnlock
 	m.isNewVault = false
-	m.err = nil
 	m.passInput.Focus()
 	if !mycrypto.HasTelegramUnlockEnvelope() {
-		return m, m.notify("✓ Aprovado no Telegram! Digite sua senha mestre uma vez para vincular o acesso rápido.")
+		m.err = fmt.Errorf("Acesso aprovado no Telegram! Digite sua senha mestre uma única vez para vincular o desbloqueio sem senha neste computador")
+		return m, nil
 	}
 	if unlockSecret == "" {
-		return m, m.notify("⚠️ Servidor não retornou chave remota. Digite sua senha mestre.")
+		m.err = fmt.Errorf("Servidor não retornou chave remota de desbloqueio. Digite sua senha mestre")
+		return m, nil
 	}
-	return m, m.notify("⚠️ Falha ao decifrar com envelope local. Digite sua senha mestre.")
+	m.err = fmt.Errorf("Falha ao decifrar envelope local com a chave do Telegram. Digite sua senha mestre")
+	return m, nil
 }
 
 // ======================== TELA LISTA ========================
@@ -1451,11 +1476,22 @@ func (m Model) viewUnlock() string {
 		b.WriteString("Defina seu PIN ou senha mestre. Essa chave gerara a criptografia AES-256 do cofre.\n\n")
 	} else {
 		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Cofre Criptografado Encontrado\n"))
-		b.WriteString("Insira sua chave de acesso para carregar os segredos na memoria RAM:\n\n")
+		if mycrypto.HasTelegramUnlockEnvelope() {
+			b.WriteString("Insira sua senha mestre ou pressione ")
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true).Render("[Ctrl+T]"))
+			b.WriteString(" para entrar direto pelo Telegram sem senha:\n\n")
+		} else {
+			b.WriteString("Insira sua chave de acesso para carregar os segredos na memoria RAM:\n")
+			b.WriteString(dimStyle.Render("(Ao entrar com a senha uma primeira vez, o desbloqueio rápido por Telegram será ativado)\n\n"))
+		}
 	}
 
 	b.WriteString(m.passInput.View() + "\n\n")
-	b.WriteString(helpStyle.Render("[Enter] Confirmar Senha  •  [Ctrl+P] Plano Pro  •  [Ctrl+T] Desbloquear com Telegram (com Timeout)  •  [Esc] Sair"))
+	if mycrypto.HasTelegramUnlockEnvelope() {
+		b.WriteString(helpStyle.Render("[Enter] Confirmar Senha  •  [Ctrl+T] Desbloquear Direto pelo Telegram  •  [Esc] Sair"))
+	} else {
+		b.WriteString(helpStyle.Render("[Enter] Confirmar Senha  •  [Ctrl+T] Vincular Telegram  •  [Esc] Sair"))
+	}
 
 	return boxStyle.Render(b.String())
 }
