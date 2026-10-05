@@ -770,7 +770,7 @@ func (m Model) visibleListHeight() int {
 		return 10
 	}
 	// Reserva o espaço real do rodapé, que cresce em janelas estreitas.
-	overhead := 12 + lipgloss.Height(m.listFooter())
+	overhead := lipgloss.Height(m.renderHeader()) + lipgloss.Height(m.categoriasLista()) + 15 + lipgloss.Height(m.listFooter())
 	if m.notification != "" || m.err != nil {
 		overhead += 2
 	}
@@ -1459,7 +1459,7 @@ func (m Model) View() string {
 }
 
 func (m Model) renderHeader() string {
-	if m.state == ViewUnlock || m.state == ViewPro {
+	if m.state == ViewUnlock || m.state == ViewPro || m.state == ViewList {
 		return m.cabecalhoAcesso()
 	}
 	isUnlocked := m.state != ViewUnlock && m.state != ViewTelegramChallenge && m.state != ViewPro
@@ -1534,21 +1534,21 @@ func (m Model) viewTelegramChallenge() string {
 
 func (m Model) viewList() string {
 	var b strings.Builder
-
-	// Categorias filtro
-	catNames := []string{"[ Todas ]", "Senhas", "Tokens", "Certificados", "SSH", "Auth/2FA", "Notas"}
-	var catTabs []string
-	for i, name := range catNames {
-		if i == m.selectedCatIdx {
-			catTabs = append(catTabs, lipgloss.NewStyle().Bold(true).Underline(true).Foreground(colorAccent).Render(name))
-		} else {
-			catTabs = append(catTabs, dimStyle.Render(name))
-		}
+	largura := m.larguraAcesso() - 4
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Seus segredos") + "\n\n")
+	b.WriteString(m.categoriasLista() + "\n\n")
+	busca := m.searchInput
+	busca.Prompt = "⌕  "
+	busca.Placeholder = "Buscar no cofre...  [/]"
+	b.WriteString(lipgloss.NewStyle().Width(largura-2).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(azulAcesso).Foreground(textoAcesso).Render(ansi.Truncate(busca.View(), largura-4, "…")) + "\n\n")
+	tipoWidth := min(12, max(6, largura/5))
+	tituloWidth := max(6, (largura-tipoWidth-4)/2)
+	loginWidth := max(1, largura-tipoWidth-tituloWidth-4)
+	coluna := func(valor string, tamanho int) string {
+		valor = strings.Join(strings.Fields(valor), " ")
+		return lipgloss.NewStyle().Width(tamanho).Render(ansi.Truncate(valor, tamanho, "…"))
 	}
-	b.WriteString(strings.Join(catTabs, "  ") + "\n\n")
-
-	// Barra de busca
-	b.WriteString(searchStyle.Render(m.searchInput.View()) + "\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(textoAcesso).Render("  "+coluna("TIPO", tipoWidth)+" "+coluna("TÍTULO", tituloWidth)+" "+coluna("IDENTIFICAÇÃO", loginWidth)) + "\n")
 
 	// Lista de segredos
 	total := len(m.filteredItems)
@@ -1559,7 +1559,7 @@ func (m Model) viewList() string {
 		} else if m.vault != nil && m.vault.Count() == 0 {
 			message = "Cofre vazio. Pressione 'n' para adicionar a primeira credencial."
 		}
-		b.WriteString("\n" + dimStyle.Render(wrapHelp([]string{message}, m.helpWidth())) + "\n\n")
+		b.WriteString("\n" + dimStyle.Render(wrapHelp([]string{message}, largura)) + "\n\n")
 	} else {
 		maxVisible := m.visibleListHeight()
 		start := m.scrollOffset
@@ -1583,22 +1583,22 @@ func (m Model) viewList() string {
 
 		for i := start; i < end; i++ {
 			item := m.filteredItems[i]
-			badge := renderCategoryBadge(string(item.Category))
+			tipo := nomeCategoriaLista(string(item.Category))
 			title := item.Title
 			loginInfo := ""
 			for _, f := range item.Fields {
 				if !f.Protected {
-					loginInfo = " (" + f.Value + ")"
+					loginInfo = f.Value
 					break
 				}
 			}
 
-			line := fmt.Sprintf(" %s  %-26s %s", badge, title, dimStyle.Render(loginInfo))
+			line := coluna(tipo, tipoWidth) + " " + coluna(title, tituloWidth) + " " + coluna(loginInfo, loginWidth)
 
 			if i == m.cursor {
-				b.WriteString(selectedItemStyle.Render("▶ "+line) + "\n")
+				b.WriteString(lipgloss.NewStyle().Width(largura).Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#0053A6")).Render("› "+line) + "\n")
 			} else {
-				b.WriteString(normalItemStyle.Render("  "+line) + "\n")
+				b.WriteString(lipgloss.NewStyle().Foreground(textoAcesso).Render("  "+line) + "\n")
 			}
 		}
 
@@ -1616,7 +1616,7 @@ func (m Model) viewList() string {
 
 	b.WriteString(m.listFooter())
 
-	return b.String()
+	return lipgloss.NewStyle().Width(m.larguraAcesso()).Padding(1, 2).Border(lipgloss.RoundedBorder()).BorderForeground(azulAcesso).Render(b.String())
 }
 
 func (m Model) viewDetail() string {

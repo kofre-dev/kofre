@@ -52,7 +52,7 @@ func (m Model) listFooter() string {
 	return helpStyle.Render(wrapHelp([]string{
 		"↑↓ Navegar", "Enter Abrir", "c Copiar", "/ Buscar",
 		"n Novo", "m Mudar Senha", "Ctrl+L Bloquear", "F1 Ajuda", "q Sair",
-	}, m.helpWidth()))
+	}, max(16, m.larguraAcesso()-4)))
 }
 
 func (m Model) helpLines() []string {

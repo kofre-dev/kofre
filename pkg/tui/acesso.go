@@ -36,6 +36,9 @@ func (m Model) cabecalhoAcesso() string {
 		esquerda = marca + "  " + versao + "  " + plano
 	}
 	larguraQuadro := min(72, w-4) + 2 // Inclui as duas bordas do painel.
+	if m.state == ViewList {
+		larguraQuadro = w + 2
+	}
 	return esquerda + "\n" + lipgloss.NewStyle().Foreground(azulAcesso).Render(strings.Repeat("─", larguraQuadro))
 }
 
