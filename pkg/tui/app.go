@@ -44,6 +44,9 @@ const (
 )
 
 type Model struct {
+	temaID        string
+	mostrarTemas  bool
+	temaCursor    int
 	storage       storage.StorageProvider
 	vault         *vault.ManagedVault
 	state         ViewState
@@ -135,6 +138,9 @@ func NewModel(store storage.StorageProvider) Model {
 		searchInput:   si,
 		searchFocused: false,
 	}
+	if cfg, err := config.LoadConfig(); err == nil {
+		m.temaID = cfg.Tema
+	}
 
 	return m
 }
@@ -154,6 +160,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		m.lastActivity = time.Now()
+		if m.mostrarTemas {
+			return m, nil
+		}
 		if m.state == ViewUnlock && msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft && !isProPlan() && m.clicouAtivarPro(msg.X, msg.Y) {
 			m.previousState = m.state
 			m.state = ViewPro
@@ -201,6 +210,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		m.lastActivity = time.Now()
+		if m.mostrarTemas && msg.Type != tea.KeyCtrlC && msg.Type != tea.KeyCtrlL {
+			return m.atualizarTemas(msg)
+		}
+		if msg.Type == tea.KeyF2 {
+			m.mostrarTemas = true
+			m.temaCursor = indiceTema(m.temaID)
+			return m, nil
+		}
 		if msg.Type == tea.KeyCtrlP && (m.state == ViewList || m.state == ViewUnlock || m.state == ViewDetail) {
 			m.previousState = m.state
 			m.state = ViewPro
@@ -1420,6 +1437,9 @@ func (m Model) activateProPlan() (tea.Model, tea.Cmd) {
 // ======================== VIEWS (RENDERIZACAO) ========================
 
 func (m Model) View() string {
+	if m.mostrarTemas {
+		return m.viewTemas()
+	}
 	if m.showHelp {
 		return m.viewHelp()
 	}
@@ -1431,9 +1451,9 @@ func (m Model) View() string {
 
 	// Notificacao / Alerta
 	if m.notification != "" {
-		s.WriteString(successStyle.Render(m.notification) + "\n\n")
+		s.WriteString(m.estilos().successStyle.Render(m.notification) + "\n\n")
 	} else if m.err != nil {
-		s.WriteString(dangerStyle.Render("Erro: "+m.err.Error()) + "\n\n")
+		s.WriteString(m.estilos().dangerStyle.Render("Erro: "+m.err.Error()) + "\n\n")
 	}
 
 	switch m.state {
@@ -1469,11 +1489,11 @@ func (m Model) renderHeader() string {
 		lockText = "🔓 DESBLOQUEADO (RAM)"
 	}
 
-	title := titleStyle.Render(" Kofre ")
-	versionBadge := dimStyle.Render("v" + updater.CurrentVersion)
-	status := statusBadgeStyle.Render(lockText)
+	title := m.estilos().titleStyle.Render(" Kofre ")
+	versionBadge := m.estilos().dimStyle.Render("v" + updater.CurrentVersion)
+	status := m.estilos().statusBadgeStyle.Render(lockText)
 
-	planBadge := dimStyle.Render("[FREE]")
+	planBadge := m.estilos().dimStyle.Render("[FREE]")
 	if isProPlan() {
 		planBadge = badgeToken.Render("★ PRO")
 	}
@@ -1484,7 +1504,7 @@ func (m Model) renderHeader() string {
 		header = fmt.Sprintf("%s  %s", header, countBadge)
 	}
 
-	return headerBoxStyle.Render(header)
+	return m.estilos().headerBoxStyle.Render(header)
 }
 
 func (m Model) viewUnlock() string {
@@ -1515,11 +1535,11 @@ func (m Model) viewTelegramChallenge() string {
 	secs := m.challengeSeconds % 60
 	timeStr := fmt.Sprintf("%02d:%02d", mins, secs)
 
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("📱 Autenticação / Recuperação via Telegram"))
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(m.cores().Destaque).Render("📱 Autenticação / Recuperação via Telegram"))
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("Enviamos uma solicitação para o seu bot @%s no Telegram.\n\n", config.GetTelegramBot()))
 	b.WriteString("Opção 1: Toque em ")
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("[ ✅ Autorizar Desbloqueio ]"))
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(m.cores().Sucesso).Render("[ ✅ Autorizar Desbloqueio ]"))
 	b.WriteString(" no seu celular.\n")
 	b.WriteString("Opção 2: Digite o código OTP de 6 dígitos enviado no Telegram:\n\n")
 
@@ -1527,20 +1547,20 @@ func (m Model) viewTelegramChallenge() string {
 
 	timerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
 	b.WriteString(fmt.Sprintf("⏱️ Tempo restante: %s\n\n", timerStyle.Render(timeStr)))
-	b.WriteString(helpStyle.Render("[Enter] Validar Código  •  [Esc] Voltar"))
+	b.WriteString(m.estilos().helpStyle.Render("[Enter] Validar Código  •  [Esc] Voltar"))
 
-	return boxStyle.Render(b.String())
+	return m.estilos().boxStyle.Render(b.String())
 }
 
 func (m Model) viewList() string {
 	var b strings.Builder
 	largura := m.larguraAcesso() - 4
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorText).Render("Seus segredos") + "\n\n")
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(m.cores().Texto).Render("Seus segredos") + "\n\n")
 	b.WriteString(m.categoriasLista() + "\n\n")
 	busca := m.searchInput
 	busca.Prompt = "⌕  "
 	busca.Placeholder = "Buscar no cofre...  [/]"
-	b.WriteString(lipgloss.NewStyle().Width(largura-2).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(azulAcesso).Foreground(textoAcesso).Render(ansi.Truncate(busca.View(), largura-4, "…")) + "\n\n")
+	b.WriteString(lipgloss.NewStyle().Width(largura-2).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(m.cores().Destaque).Foreground(m.cores().Suave).Render(ansi.Truncate(busca.View(), largura-4, "…")) + "\n\n")
 	tipoWidth := min(12, max(6, largura/5))
 	tituloWidth := max(6, (largura-tipoWidth-4)/2)
 	loginWidth := max(1, largura-tipoWidth-tituloWidth-4)
@@ -1548,7 +1568,7 @@ func (m Model) viewList() string {
 		valor = strings.Join(strings.Fields(valor), " ")
 		return lipgloss.NewStyle().Width(tamanho).Render(ansi.Truncate(valor, tamanho, "…"))
 	}
-	b.WriteString(lipgloss.NewStyle().Foreground(textoAcesso).Render("  "+coluna("TIPO", tipoWidth)+" "+coluna("TÍTULO", tituloWidth)+" "+coluna("IDENTIFICAÇÃO", loginWidth)) + "\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(m.cores().Suave).Render("  "+coluna("TIPO", tipoWidth)+" "+coluna("TÍTULO", tituloWidth)+" "+coluna("IDENTIFICAÇÃO", loginWidth)) + "\n")
 
 	// Lista de segredos
 	total := len(m.filteredItems)
@@ -1559,7 +1579,7 @@ func (m Model) viewList() string {
 		} else if m.vault != nil && m.vault.Count() == 0 {
 			message = "Cofre vazio. Pressione 'n' para adicionar a primeira credencial."
 		}
-		b.WriteString("\n" + dimStyle.Render(wrapHelp([]string{message}, largura)) + "\n\n")
+		b.WriteString("\n" + m.estilos().dimStyle.Render(wrapHelp([]string{message}, largura)) + "\n\n")
 	} else {
 		maxVisible := m.visibleListHeight()
 		start := m.scrollOffset
@@ -1576,7 +1596,7 @@ func (m Model) viewList() string {
 
 		// Indicador de itens acima
 		if start > 0 {
-			b.WriteString(dimStyle.Render(fmt.Sprintf("    ▲ %d item(ns) acima...", start)) + "\n")
+			b.WriteString(m.estilos().dimStyle.Render(fmt.Sprintf("    ▲ %d item(ns) acima...", start)) + "\n")
 		} else {
 			b.WriteString("\n")
 		}
@@ -1596,27 +1616,27 @@ func (m Model) viewList() string {
 			line := coluna(tipo, tipoWidth) + " " + coluna(title, tituloWidth) + " " + coluna(loginInfo, loginWidth)
 
 			if i == m.cursor {
-				b.WriteString(lipgloss.NewStyle().Width(largura).Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#0053A6")).Render("› "+line) + "\n")
+				b.WriteString(lipgloss.NewStyle().Width(largura).Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(m.cores().Selecao).Render("› "+line) + "\n")
 			} else {
-				b.WriteString(lipgloss.NewStyle().Foreground(textoAcesso).Render("  "+line) + "\n")
+				b.WriteString(lipgloss.NewStyle().Foreground(m.cores().Suave).Render("  "+line) + "\n")
 			}
 		}
 
 		// Indicador de itens abaixo
 		remaining := total - end
 		if remaining > 0 {
-			b.WriteString(dimStyle.Render(fmt.Sprintf("    ▼ %d item(ns) abaixo...", remaining)) + "\n")
+			b.WriteString(m.estilos().dimStyle.Render(fmt.Sprintf("    ▼ %d item(ns) abaixo...", remaining)) + "\n")
 		} else {
 			b.WriteString("\n")
 		}
 
 		// Informação de posição
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  [Item %d de %d]", m.cursor+1, total)) + "\n")
+		b.WriteString(m.estilos().dimStyle.Render(fmt.Sprintf("  [Item %d de %d]", m.cursor+1, total)) + "\n")
 	}
 
 	b.WriteString(m.listFooter())
 
-	return lipgloss.NewStyle().Width(m.larguraAcesso()).Padding(1, 2).Border(lipgloss.RoundedBorder()).BorderForeground(azulAcesso).Render(b.String())
+	return lipgloss.NewStyle().Width(m.larguraAcesso()).Padding(1, 2).Border(lipgloss.RoundedBorder()).BorderForeground(m.cores().Destaque).Render(b.String())
 }
 
 func (m Model) viewDetail() string {
@@ -1626,13 +1646,13 @@ func (m Model) viewDetail() string {
 	badge := renderCategoryBadge(string(entry.Category))
 
 	b.WriteString(fmt.Sprintf("%s  %s\n", badge, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Render(entry.Title)))
-	b.WriteString(dimStyle.Render(fmt.Sprintf("ID: %s  •  Versao: %d  •  Atualizado em: %s\n\n",
+	b.WriteString(m.estilos().dimStyle.Render(fmt.Sprintf("ID: %s  •  Versao: %d  •  Atualizado em: %s\n\n",
 		entry.ID[:8], entry.Version, entry.UpdatedAt.Format("02/01/2006 15:04"))))
 
 	b.WriteString(lipgloss.NewStyle().Underline(true).Render("Campos e Credenciais:") + "\n")
 
 	if len(entry.Fields) == 0 {
-		b.WriteString(dimStyle.Render("  Nenhum campo cadastrado.") + "\n")
+		b.WriteString(m.estilos().dimStyle.Render("  Nenhum campo cadastrado.") + "\n")
 	} else {
 		for i, f := range entry.Fields {
 			displayVal := f.Value
@@ -1647,9 +1667,9 @@ func (m Model) viewDetail() string {
 
 			line := fmt.Sprintf("%s%-14s : %s", prefix, f.Name, displayVal)
 			if i == m.detailCursor {
-				b.WriteString(selectedItemStyle.Render(line) + "\n")
+				b.WriteString(m.estilos().selectedItemStyle.Render(line) + "\n")
 			} else {
-				b.WriteString(normalItemStyle.Render(line) + "\n")
+				b.WriteString(m.estilos().normalItemStyle.Render(line) + "\n")
 			}
 		}
 	}
@@ -1659,9 +1679,9 @@ func (m Model) viewDetail() string {
 		b.WriteString("  " + entry.Notes + "\n")
 	}
 
-	b.WriteString(helpStyle.Render("\n[↑/↓] Selecionar Campo • [Enter/c] Copiar Campo • [v] Revelar/Ocultar • [e] Editar • [Esc] Voltar"))
+	b.WriteString(m.estilos().helpStyle.Render("\n[↑/↓] Selecionar Campo • [Enter/c] Copiar Campo • [v] Revelar/Ocultar • [e] Editar • [Esc] Voltar"))
 
-	return boxStyle.Render(b.String())
+	return m.estilos().boxStyle.Render(b.String())
 }
 
 func (m Model) viewForm() string {
@@ -1672,29 +1692,29 @@ func (m Model) viewForm() string {
 		titleText = "Editar Credencial: " + m.selectedEntry.Title
 	}
 
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render(titleText) + "\n\n")
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(m.cores().Destaque).Render(titleText) + "\n\n")
 
 	for i := range m.formInputs {
 		b.WriteString(m.formInputs[i].View() + "\n")
 		if i == 3 {
-			b.WriteString(dimStyle.Render("  (Dica: aperte Ctrl+G para gerar senha forte)") + "\n")
+			b.WriteString(m.estilos().dimStyle.Render("  (Dica: aperte Ctrl+G para gerar senha forte)") + "\n")
 		}
 		b.WriteString("\n")
 	}
 
-	b.WriteString(helpStyle.Render("[Tab/Shift+Tab] Alternar Campos • [Ctrl+G] Gerar Senha • [Ctrl+S ou Enter no fim] Salvar • [Esc] Cancelar"))
+	b.WriteString(m.estilos().helpStyle.Render("[Tab/Shift+Tab] Alternar Campos • [Ctrl+G] Gerar Senha • [Ctrl+S ou Enter no fim] Salvar • [Esc] Cancelar"))
 
-	return boxStyle.Render(b.String())
+	return m.estilos().boxStyle.Render(b.String())
 }
 
 func (m Model) viewConfirmDelete() string {
 	var b strings.Builder
 
-	b.WriteString(dangerStyle.Render("⚠️  Confirmar Exclusao\n\n"))
+	b.WriteString(m.estilos().dangerStyle.Render("⚠️  Confirmar Exclusao\n\n"))
 	b.WriteString(fmt.Sprintf("Deseja realmente apagar o segredo '%s'?\nEsta acao nao pode ser desfeita.\n\n", m.deleteTitle))
-	b.WriteString(helpStyle.Render("[Y / S] Sim, excluir  •  [N / Esc] Cancelar"))
+	b.WriteString(m.estilos().helpStyle.Render("[Y / S] Sim, excluir  •  [N / Esc] Cancelar"))
 
-	return boxStyle.Render(b.String())
+	return m.estilos().boxStyle.Render(b.String())
 }
 
 func (m Model) viewPro() string {
@@ -1854,14 +1874,14 @@ func (m *Model) changePassword(newPass []byte) error {
 func (m Model) viewChangePassword() string {
 	var b strings.Builder
 
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("🔑 Alterar Senha Mestre do Cofre"))
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(m.cores().Destaque).Render("🔑 Alterar Senha Mestre do Cofre"))
 	b.WriteString("\n")
 	b.WriteString("Ao confirmar, todos os segredos serão recriptografados com a nova chave e um novo salt aleatório.")
 	b.WriteString("\n\n")
 
 	label1 := "Nova Senha Mestre:"
 	if m.changePassFocus == 0 {
-		label1 = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("▸ Nova Senha Mestre:")
+		label1 = lipgloss.NewStyle().Bold(true).Foreground(m.cores().Destaque).Render("▸ Nova Senha Mestre:")
 	}
 	b.WriteString(label1)
 	b.WriteString("\n")
@@ -1870,14 +1890,14 @@ func (m Model) viewChangePassword() string {
 
 	label2 := "Confirmar Nova Senha:"
 	if m.changePassFocus == 1 {
-		label2 = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("▸ Confirmar Nova Senha:")
+		label2 = lipgloss.NewStyle().Bold(true).Foreground(m.cores().Destaque).Render("▸ Confirmar Nova Senha:")
 	}
 	b.WriteString(label2)
 	b.WriteString("\n")
 	b.WriteString(m.confirmPassInput.View())
 	b.WriteString("\n\n")
 
-	b.WriteString(helpStyle.Render("[Enter] Salvar Nova Senha  •  [Tab] Alternar Campo  •  [Esc] Cancelar"))
+	b.WriteString(m.estilos().helpStyle.Render("[Enter] Salvar Nova Senha  •  [Tab] Alternar Campo  •  [Esc] Cancelar"))
 
-	return boxStyle.Render(b.String())
+	return m.estilos().boxStyle.Render(b.String())
 }

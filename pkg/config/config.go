@@ -21,6 +21,7 @@ var (
 
 // AppConfig armazena as configuracoes do usuario
 type AppConfig struct {
+	Tema          string `json:"tema,omitempty"`
 	Mode          string `json:"mode"`          // "local" ou "cloud"
 	VaultPath     string `json:"vault_path"`    // caminho do arquivo local
 	CloudEnabled  bool   `json:"cloud_enabled"` // se sincronizacao com S3 esta ativa

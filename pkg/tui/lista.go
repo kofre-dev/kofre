@@ -6,9 +6,9 @@ func (m Model) categoriasLista() string {
 	nomes := []string{"Todas", "Senhas", "Tokens", "Certificados", "SSH", "Auth/2FA", "Notas"}
 	for i := range nomes {
 		if i == m.selectedCatIdx {
-			nomes[i] = lipgloss.NewStyle().Bold(true).Foreground(azulAcesso).Render("[" + nomes[i] + "]")
+			nomes[i] = lipgloss.NewStyle().Bold(true).Foreground(m.cores().Destaque).Render("[" + nomes[i] + "]")
 		} else {
-			nomes[i] = lipgloss.NewStyle().Foreground(textoAcesso).Render(nomes[i])
+			nomes[i] = lipgloss.NewStyle().Foreground(m.cores().Suave).Render(nomes[i])
 		}
 	}
 	return wrapHelp(nomes, m.larguraAcesso()-4)

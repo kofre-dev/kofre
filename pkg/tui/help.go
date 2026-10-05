@@ -49,9 +49,9 @@ func wrapHelp(items []string, width int) string {
 }
 
 func (m Model) listFooter() string {
-	return helpStyle.Render(wrapHelp([]string{
+	return m.estilos().helpStyle.Render(wrapHelp([]string{
 		"↑↓ Navegar", "Enter Abrir", "c Copiar", "/ Buscar",
-		"n Novo", "m Mudar Senha", "Ctrl+L Bloquear", "F1 Ajuda", "q Sair",
+		"n Novo", "m Mudar Senha", "Ctrl+L Bloquear", "F1 Ajuda", "F2 Temas", "q Sair",
 	}, max(16, m.larguraAcesso()-4)))
 }
 
@@ -70,6 +70,7 @@ func (m Model) helpLines() []string {
 		"m: alterar senha mestre do cofre (recriptografia)",
 		"Tab/Shift+Tab: mudar categoria",
 		"p: plano e status Pro",
+		"F2: escolher tema de cores",
 		"Ctrl+L: bloquear o cofre",
 		"q ou Ctrl+C: sair do Kofre",
 	}
@@ -97,5 +98,5 @@ func (m Model) viewHelp() string {
 	lines := m.helpLines()
 	start := min(m.helpOffset, m.helpMaxOffset())
 	end := min(len(lines), start+m.helpPageHeight())
-	return "Atalhos da lista\n\n" + strings.Join(lines[start:end], "\n") + "\n\n" + dimStyle.Render(m.helpNavigation())
+	return "Atalhos da lista\n\n" + strings.Join(lines[start:end], "\n") + "\n\n" + m.estilos().dimStyle.Render(m.helpNavigation())
 }
