@@ -19,6 +19,9 @@ var temas = []paletaTema{
 	{"esmeralda", "Esmeralda", "#36D7A0", "#97F0D0", "#087553", "#125940", "#E2F5ED", "#A0C8B8", "#6EE7B7", "#245344"},
 	{"ambar", "Âmbar", "#F5BC55", "#FFE0A0", "#86520A", "#62420F", "#FFF0D6", "#D5BC91", "#BADD87", "#554328"},
 	{"grafite", "Grafite", "#BCC7D8", "#F1F5F9", "#46556B", "#344257", "#E8EDF4", "#A2ADBC", "#BCC7D8", "#3E4857"},
+	{"nevoa", "Névoa", "#8094A5", "#A8B8C5", "#344A5B", "#263C4C", "#C0CAD2", "#8D9BA7", "#8FAFA3", "#34414D"},
+	{"salvia", "Sálvia", "#839B8C", "#A8BAAC", "#3E5547", "#2E4136", "#C5CFC7", "#929F95", "#9CB6A2", "#37473C"},
+	{"areia", "Areia", "#B09B80", "#CABBAB", "#665646", "#4B4136", "#D1C9BE", "#A69B8D", "#A5B298", "#4C443B"},
 }
 
 func indiceTema(id string) int {
