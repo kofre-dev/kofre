@@ -2,11 +2,8 @@ package updater
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,7 +16,7 @@ import (
 )
 
 // CurrentVersion define a versão atual compilada do binário do Kofre
-const CurrentVersion = "1.0.9"
+const CurrentVersion = "1.0.13"
 
 // PlatformRelease armazena os metadados do binário para um sistema operacional e arquitetura
 type PlatformRelease struct {
@@ -58,7 +55,10 @@ func CheckForUpdate(endpoint string) (*ReleaseMetadata, bool, error) {
 		return nil, false, err
 	}
 
-	client := &http.Client{Timeout: 3 * time.Second}
+	if err := secureURL(url); err != nil {
+		return nil, false, err
+	}
+	client := updateClient(3 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, false, err
@@ -147,7 +147,21 @@ func AutoUpdate(endpoint string, silent bool) (bool, error) {
 
 	dir := filepath.Dir(execPath)
 	base := filepath.Base(execPath)
-	tempPath := filepath.Join(dir, base+".new")
+	tmp, err := os.CreateTemp(dir, ".kofre-update-*.new")
+	if err != nil {
+		return false, err
+	}
+	tempPath := tmp.Name()
+	if err = tmp.Chmod(0755); err != nil {
+		tmp.Close()
+		os.Remove(tempPath)
+		return false, err
+	}
+	if err = tmp.Close(); err != nil {
+		os.Remove(tempPath)
+		return false, err
+	}
+	defer os.Remove(tempPath)
 	oldPath := filepath.Join(dir, base+".old")
 
 	downloadURL := platInfo.URL
@@ -158,44 +172,8 @@ func AutoUpdate(endpoint string, silent bool) (bool, error) {
 		downloadURL = strings.TrimRight(endpoint, "/") + "/" + strings.TrimLeft(downloadURL, "/")
 	}
 
-	// 2. Download do novo binário
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Get(downloadURL)
-	if err != nil {
-		fmt.Println("❌")
-		return false, fmt.Errorf("falha ao baixar binário: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		fmt.Println("❌")
-		return false, fmt.Errorf("erro no download do binário, HTTP status: %d", resp.StatusCode)
-	}
-
-	out, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-	if err != nil {
-		fmt.Println("❌")
-		return false, fmt.Errorf("falha ao criar arquivo temporário: %w", err)
-	}
-
-	hasher := sha256.New()
-	multiWriter := io.MultiWriter(out, hasher)
-	_, err = io.Copy(multiWriter, resp.Body)
-	_ = out.Close()
-	if err != nil {
-		_ = os.Remove(tempPath)
-		fmt.Println("❌")
-		return false, fmt.Errorf("falha ao gravar binário: %w", err)
-	}
-
-	// 3. Validação do Hash SHA-256 se fornecido
-	if platInfo.SHA256 != "" {
-		calculatedSHA := hex.EncodeToString(hasher.Sum(nil))
-		if !strings.EqualFold(calculatedSHA, platInfo.SHA256) {
-			_ = os.Remove(tempPath)
-			fmt.Println("❌")
-			return false, fmt.Errorf("validação de integridade falhou: checksum não confere")
-		}
+	if err := downloadRelease(downloadURL, tempPath, platInfo); err != nil {
+		return false, fmt.Errorf("atualização recusada: %w", err)
 	}
 
 	// 4. Substituição atômica no Windows / Unix
