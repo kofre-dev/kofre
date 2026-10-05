@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"kofre/internal/arquivo"
 	"os"
 	"path/filepath"
 
@@ -43,39 +44,10 @@ func (l *LocalStorage) Load(ctx context.Context) ([]byte, error) {
 }
 
 func (l *LocalStorage) Save(ctx context.Context, data []byte) error {
-	dir := filepath.Dir(l.filePath)
-	tmpFile, err := os.CreateTemp(dir, "Kofre-*.tmp")
-	if err != nil {
-		return fmt.Errorf("falha ao criar arquivo temporario para gravacao: %w", err)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	tmpName := tmpFile.Name()
-
-	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("falha ao escrever no arquivo temporario: %w", err)
-	}
-
-	if err := tmpFile.Sync(); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("falha ao sincronizar arquivo com disco: %w", err)
-	}
-	tmpFile.Close()
-
-	// Substituicao atomica (ou sobrescrita segura no Windows)
-	if err := os.Rename(tmpName, l.filePath); err != nil {
-		// No Windows se o arquivo de destino ja existir o rename simples pode falhar, usamos remove antes
-		_ = os.Remove(l.filePath)
-		if err := os.Rename(tmpName, l.filePath); err != nil {
-			os.Remove(tmpName)
-			return fmt.Errorf("falha ao substituir arquivo do cofre: %w", err)
-		}
-	}
-
-	_ = mycrypto.RestrictFilePermissions(l.filePath)
-
-	return nil
+	return arquivo.Gravar(l.filePath, data, mycrypto.RestrictFilePermissions)
 }
 
 func (l *LocalStorage) Exists(ctx context.Context) (bool, error) {

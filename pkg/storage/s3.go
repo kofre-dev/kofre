@@ -157,6 +157,9 @@ func (s *S3Storage) Delete(ctx context.Context) error {
 		return fmt.Errorf("falha ao deletar do S3: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
+		return fmt.Errorf("erro S3 DELETE HTTP %d", resp.StatusCode)
+	}
 	return nil
 }
 

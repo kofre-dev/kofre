@@ -10,6 +10,8 @@ import (
 )
 
 func TestTelegramEnvelopeSplitKey(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	var capturedUnlockKey string
 
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +37,7 @@ func TestTelegramEnvelopeSplitKey(t *testing.T) {
 	}
 	defer os.Remove(path)
 
-	dummyVaultKey := []byte("32-bytes-secure-vault-key-123456")
+	dummyVaultKey := bytes.Repeat([]byte{7}, KeyLength)
 
 	// 1. Salva o envelope split-key
 	err = SaveTelegramUnlockEnvelope(dummyVaultKey, "mock-token", mockServer.URL)

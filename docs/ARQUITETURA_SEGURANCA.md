@@ -6,11 +6,11 @@ Este documento descreve detalhadamente a arquitetura criptográfica, o fluxo de 
 
 ## 1. Princípio Fundamental: Zero-Knowledge (E2EE)
 
-No Kofre, o servidor **NUNCA decifra nada e JAMAIS tem acesso a qualquer senha ou credencial**.
+A decifração das credenciais acontece no cliente. O gateway armazena o cofre cifrado, licenças, vínculos e segredos remotos dos envelopes Telegram por dispositivo.
 
 - **Sua Master Password nunca sai da sua máquina.** Ela nunca é enviada pela rede, nunca é gravada em logs e nunca chega ao Railway ou à AWS.
-- **O servidor é apenas um intermediário cego de armazenamento (Storage Broker).** Ele apenas transporta blocos binários opacos e indecifráveis (`vault.enc`).
-- Mesmo que o servidor Railway seja invadido ou o bucket AWS S3 seja exposto publicamente, **nenhum dado é vazado**, pois tudo está blindado com criptografia militar de ponta a ponta.
+- O gateway transporta `vault.enc` cifrado e gerencia metadados de autorização. A metade remota do envelope Telegram, sozinha, não reconstrói a chave do cofre.
+- Exposição do servidor ou bucket revela metadados e bytes cifrados. A segurança do conteúdo também depende da senha mestre, das chaves e da integridade do cliente; não há promessa de inviolabilidade.
 
 ---
 
@@ -46,16 +46,18 @@ A decifração acontece **exclusivamente na memória RAM do seu computador local
 
 ## 3. Estrutura Criptográfica do Arquivo (`vault.enc`)
 
-O arquivo gravado no disco e no S3 possui a seguinte estrutura binária inviolável:
+O arquivo gravado no disco e no S3 possui a seguinte estrutura binária:
 
 | Offset | Tamanho | Campo | Descrição |
 |---|---|---|---|
-| `0..31` | 32 bytes | **Salt Argon2id** | Salt criptográfico aleatório único por cofre gerado via `crypto/rand` |
-| `32..43` | 12 bytes | **Nonce / IV** | Vetor de inicialização padrão do AES-256-GCM |
-| `44..N-16` | Variável | **Ciphertext** | Payload JSON compactado com Gzip e criptografado com AES-256 |
-| `N-16..N` | 16 bytes | **Auth Tag GCM** | Tag de integridade que impede qualquer adulteração ou corrupção de bits |
+| `0..7` | 8 bytes | **Magic** | `KOFRE001`, com leitura compatível de `MYCOFRE1` |
+| `8..23` | 16 bytes | **Salt Argon2id** | Salt aleatório por cofre; renovado na troca da senha mestre |
+| `24..35` | 12 bytes | **Nonce / IV** | Nonce aleatório por gravação AES-GCM |
+| `36..N-17` | Variável | **Ciphertext** | Payload JSON cifrado; não usa Gzip |
+| `N-16..N-1` | 16 bytes | **Auth Tag GCM** | Verificada durante a decifração |
 
-> **Nota:** Sem a Master Password para derivar a chave a partir do Salt, é matematicamente impossível reverter o Ciphertext.
+A senha mestre forte e a proteção da chave continuam necessárias. Revelação, clipboard e processos filhos produzem cópias fora dos buffers controlados.
+
 
 ---
 
@@ -97,14 +99,26 @@ sequenceDiagram
 O bot oficial atua como uma camada de **governança, telemetria e botão de emergência**:
 
 ### Recursos do Bot:
-- **`/panic` (Kill-Switch Remoto):** Bloqueia instantaneamente o cofre no servidor. Se ativado, qualquer tentativa de `GET` ou `PUT` na nuvem é sumariamente rejeitada pela API com `HTTP 423 Locked`.
+- **`/panic` (Kill-Switch Remoto):** Bloqueia instantaneamente o cofre no servidor. Se ativado, qualquer tentativa de `GET`, `PUT` ou `DELETE` na nuvem é sumariamente rejeitada pela API com `HTTP 423 Locked`.
 - **`/unlock`:** Desativa a trava de pânico e devolve o acesso aos dispositivos legítimos.
 - **`/status`:** Consulta o estado de segurança, data e hora da última sincronização e tamanho do cofre.
 - **Alertas em Tempo Real:** Disparados a cada alteração ou download.
 
 ### Código-Fonte Relevante no Repositório:
-- **Motor do Bot e Webhook:** [`pkg/server/telegram.go`](file:///D:/Projetos/myCofre/pkg/server/telegram.go)
-- **Servidor e Rotas:** [`pkg/server/server.go`](file:///D:/Projetos/myCofre/pkg/server/server.go)
-- **Auto-Sync Provider:** [`pkg/storage/sync.go`](file:///D:/Projetos/myCofre/pkg/storage/sync.go)
-- **Auto-Updater e Releases:** [`pkg/updater/updater.go`](file:///D:/Projetos/myCofre/pkg/updater/updater.go)
-- **Criptografia Core:** [`pkg/crypto/crypto.go`](file:///D:/Projetos/myCofre/pkg/crypto/crypto.go)
+- **Motor do Bot e Webhook:** [`pkg/server/telegram.go`](../../kofre-cloud/pkg/server/telegram.go)
+- **Servidor e Rotas:** [`pkg/server/server.go`](../../kofre-cloud/pkg/server/server.go)
+- **Auto-Sync Provider:** [`pkg/storage/sync.go`](../pkg/storage/sync.go)
+- **Auto-Updater e Releases:** [`pkg/updater/updater.go`](../pkg/updater/updater.go)
+- **Criptografia Core:** [`pkg/crypto/crypto.go`](../pkg/crypto/crypto.go)
+
+## 6. Autorização, dispositivos e recuperação de sincronização
+
+O webhook exige `X-Telegram-Bot-Api-Secret-Token` e conversa privada do titular. Status e verificação do desafio também exigem Bearer e conferem a conta. Expiração, limite de tentativas e entrega única são controlados sob trava. Licenças precisam de emissão administrativa, estado ativo e vencimento futuro; erro ou ausência de perfil não autoriza acesso.
+
+Cada envelope tem um `device_id` e um segredo remoto próprio. Envelope novo não substitui segredos de outros computadores. Após troca de senha, outros dispositivos devem baixar o cofre atualizado e usar a nova senha mestre para recriar seus envelopes. Uma falha ao atualizar o Telegram é informada sem desfazer a troca de senha já persistida.
+
+A sincronização preserva `vault.enc.sync-pending.json` até confirmar o envio. Falha remota mantém o estado local e pendente; reiniciar retoma o envio. Troca de destino com pendência é recusada. O encerramento informa se o prazo do `Flush` terminou antes da confirmação.
+
+Os instaladores e o updater exigem checksum SHA-256 e tamanho; downloads usam uma versão específica. Gravações locais preparam e sincronizam um temporário antes de substituir o destino, sem apagar o arquivo anterior em caso de falha.
+
+Veja [contratos de migração e validação](../../kofre-cloud/docs/AJUSTES_SEGURANCA.md). Builds Windows, Linux e macOS foram reconferidos; execução de APIs Windows e smoke são validados no Windows.

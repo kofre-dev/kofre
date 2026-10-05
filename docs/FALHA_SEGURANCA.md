@@ -407,7 +407,7 @@ Esse arquivo não foi instalado sobre o Kofre em uso.
    `SetErrorMode` não são substitutos dessas fronteiras de segurança.
 5. Fora do Windows, o buffer usa AES-GCM e chave efêmera no mesmo processo,
    o que evita texto simples ocioso mas não isola a chave de um leitor de RAM.
-   Builds completos de Linux/macOS continuam bloqueados por erros já presentes
+   Na etapa histórica descrita acima, os builds completos de Linux/macOS estavam bloqueados por erros já presentes
    no código anterior: `config.go` referencia `EncryptWithDPAPI`/
    `DecryptWithDPAPI` inexistentes fora do Windows, e `mem_unix.go` referencia
    `unix.Prctl`/`PR_SET_DUMPABLE` indisponíveis no build Darwin. Não houve mudança
@@ -438,3 +438,7 @@ passou em `go test ./...`, `go vet ./...` e build Linux. A resposta pública de
 metadados e o download foram conferidos contra versão, tamanho e SHA-256 locais.
 O binário público anterior e seus metadados foram preservados em `kofre-cloud/build`
 para reversão. Linux/macOS não foram publicados nesta rodada.
+
+## Atualização de estado — 05/10/2026
+
+A pendência histórica de builds Linux/macOS não representa o código vigente: o fallback de DPAPI fora do Windows e a separação da proteção específica de Linux já permitem compilar. As correções de autenticação, pânico, sincronização, envelopes por dispositivo e gravação estão descritas em [AJUSTES_SEGURANCA.md](../../kofre-cloud/docs/AJUSTES_SEGURANCA.md). Isso não altera os limites das varreduras históricas de memória nem equivale a um reteste do executável pessoal instalado.

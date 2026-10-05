@@ -2,134 +2,217 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
+	"kofre/internal/arquivo"
+	"os"
 	"sync"
 	"time"
 )
 
-// SyncStorage combina o armazenamento local com a nuvem (Kofre Cloud ou S3 próprio).
-// Ele garante um design offline-first ultra rápido:
-// 1. Qualquer criação, edição ou exclusão de credencial é gravada localmente de forma atômica e instantânea (< 1ms).
-// 2. A sincronização com a nuvem (S3/Kofre Cloud) roda em segundo plano (background worker assíncrono).
-// 3. Modificações em sequência são automaticamente agrupadas (coalescing), evitando requisições HTTP desnecessárias.
-// 4. Ao sair da aplicação, o Flush garante que a última versão pendente seja enviada.
+// SyncStorage conserva o último estado pendente até confirmar a gravação remota.
+// Com LocalStorage, um marcador no disco permite retomar o envio após reinício.
 type SyncStorage struct {
-	local     StorageProvider
-	remote    StorageProvider
-	mu        sync.Mutex
-	pending   []byte
-	isSyncing bool
+	local, remote    StorageProvider
+	mu               sync.Mutex
+	pending          []byte
+	sequence         uint64
+	syncing          bool
+	lastErr, initErr error
+	marker           string
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wake, changed    chan struct{}
+	done             chan struct{}
 }
 
-// NewSyncStorage cria uma instância que sincroniza local e remoto
 func NewSyncStorage(local, remote StorageProvider) *SyncStorage {
-	return &SyncStorage{
-		local:  local,
-		remote: remote,
-	}
-}
-
-// Load carrega os dados locais se existirem; se não existirem, busca na nuvem e grava local
-func (s *SyncStorage) Load(ctx context.Context) ([]byte, error) {
-	localExists, _ := s.local.Exists(ctx)
-	if localExists {
-		return s.local.Load(ctx)
-	}
-
-	// Não existe localmente: verifica se existe na nuvem (ex: setup em máquina nova)
-	if s.remote != nil {
-		remoteExists, errRemote := s.remote.Exists(ctx)
-		if errRemote == nil && remoteExists {
-			data, err := s.remote.Load(ctx)
-			if err == nil && len(data) >= 60 {
-				// Salva automaticamente a cópia local para uso offline
-				_ = s.local.Save(ctx, data)
-				return data, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &SyncStorage{local: local, remote: remote, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), changed: make(chan struct{}, 1), done: make(chan struct{})}
+	if l, ok := local.(*LocalStorage); ok && remote != nil {
+		s.marker = l.filePath + ".sync-pending.json"
+		data, err := os.ReadFile(s.marker)
+		if err == nil {
+			var mark struct {
+				Remote string `json:"remote"`
 			}
+			if err = json.Unmarshal(data, &mark); err != nil {
+				s.initErr = fmt.Errorf("marcador de sincronização inválido: %w", err)
+			} else if mark.Remote != syncDestination(remote) {
+				s.initErr = errors.New("pendência pertence a outro destino; sincronize com o destino anterior antes de trocar")
+			} else {
+				s.pending, s.initErr = local.Load(ctx)
+				s.sequence++
+			}
+		} else if !os.IsNotExist(err) {
+			s.initErr = err
 		}
 	}
-
-	return s.local.Load(ctx)
+	go s.backgroundSyncWorker()
+	if len(s.pending) > 0 {
+		s.signal(s.wake)
+	}
+	return s
 }
-
-// Save grava primeiro localmente e despacha a sincronização com a nuvem em segundo plano
+func (s *SyncStorage) signal(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+func (s *SyncStorage) Load(ctx context.Context) ([]byte, error) {
+	if s.initErr != nil {
+		return nil, s.initErr
+	}
+	data, err := s.local.Load(ctx)
+	if err == nil {
+		return data, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	if s.remote == nil {
+		return nil, err
+	}
+	data, err = s.remote.Load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err = s.local.Save(ctx, data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
 func (s *SyncStorage) Save(ctx context.Context, data []byte) error {
-	// 1. Grava no disco local (atomic, instantâneo, offline-first)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.initErr != nil {
+		return s.initErr
+	}
+	if err := s.ctx.Err(); err != nil {
+		return errors.New("sincronização encerrada")
+	}
+	if s.remote != nil && s.marker != "" {
+		mark, _ := json.Marshal(map[string]string{"remote": syncDestination(s.remote)})
+		if err := arquivo.Gravar(s.marker, mark, nil); err != nil {
+			return fmt.Errorf("falha ao preservar pendência: %w", err)
+		}
+	}
 	if err := s.local.Save(ctx, data); err != nil {
 		return fmt.Errorf("falha ao salvar localmente: %w", err)
 	}
-
-	// 2. Se houver nuvem configurada, agenda sincronização assíncrona em segundo plano
 	if s.remote != nil {
-		s.mu.Lock()
-		// Cria cópia segura dos bytes
-		cp := make([]byte, len(data))
-		copy(cp, data)
-		s.pending = cp
-
-		if !s.isSyncing {
-			s.isSyncing = true
-			go s.backgroundSyncWorker()
-		}
-		s.mu.Unlock()
+		s.pending = append([]byte(nil), data...)
+		s.sequence++
+		s.signal(s.wake)
 	}
-
 	return nil
 }
-
-// backgroundSyncWorker processa a sincronização em lote/segundo plano sem travar a interface
 func (s *SyncStorage) backgroundSyncWorker() {
+	defer close(s.done)
 	for {
-		s.mu.Lock()
-		if len(s.pending) == 0 {
-			s.isSyncing = false
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-s.wake:
+		}
+		for {
+			s.mu.Lock()
+			if s.pending == nil {
+				s.mu.Unlock()
+				break
+			}
+			data := append([]byte(nil), s.pending...)
+			seq := s.sequence
+			s.syncing = true
 			s.mu.Unlock()
-			return
+			ctx, cancel := context.WithTimeout(s.ctx, 20*time.Second)
+			err := s.remote.Save(ctx, data)
+			cancel()
+			s.mu.Lock()
+			s.syncing = false
+			s.lastErr = err
+			if err == nil && s.sequence == seq {
+				if s.marker != "" {
+					err = os.Remove(s.marker)
+					if os.IsNotExist(err) {
+						err = nil
+					}
+				}
+				if err == nil {
+					s.pending = nil
+				} else {
+					s.lastErr = fmt.Errorf("falha ao confirmar pendência: %w", err)
+				}
+			}
+			more := s.pending != nil
+			s.mu.Unlock()
+			s.signal(s.changed)
+			if !more {
+				break
+			}
+			if err != nil {
+				timer := time.NewTimer(time.Second)
+				select {
+				case <-s.ctx.Done():
+					timer.Stop()
+					return
+				case <-s.wake:
+					timer.Stop()
+				case <-timer.C:
+				}
+			}
 		}
-		dataToSync := s.pending
-		s.pending = nil
-		s.mu.Unlock()
-
-		syncCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		if err := s.remote.Save(syncCtx, dataToSync); err != nil {
-			log.Printf("[Sync em Segundo Plano] Cofre salvo localmente, mas sincronização em nuvem falhou: %v", err)
-		}
-		cancel()
 	}
 }
-
-// Flush aguarda a sincronização pendente finalizar (útil ao fechar a aplicação)
-func (s *SyncStorage) Flush(timeout time.Duration) {
-	deadline := time.Now().Add(timeout)
+func (s *SyncStorage) Flush(timeout time.Duration) error {
+	if s.initErr != nil {
+		return s.initErr
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	s.signal(s.wake)
 	for {
 		s.mu.Lock()
-		busy := s.isSyncing || len(s.pending) > 0
+		busy := s.syncing || s.pending != nil
+		err := s.lastErr
 		s.mu.Unlock()
-
-		if !busy || time.Now().After(deadline) {
-			return
+		if !busy {
+			return nil
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-s.changed:
+		case <-ticker.C:
+		case <-s.ctx.Done():
+			return errors.New("sincronização encerrada com pendência")
+		case <-timer.C:
+			if err != nil {
+				return fmt.Errorf("envio permanece pendente: %w", err)
+			}
+			return errors.New("tempo esgotado; envio permanece pendente")
+		}
 	}
 }
-
-// Exists verifica existência local ou remota
+func (s *SyncStorage) Close() { s.cancel(); <-s.done }
 func (s *SyncStorage) Exists(ctx context.Context) (bool, error) {
-	localExists, err := s.local.Exists(ctx)
-	if err == nil && localExists {
-		return true, nil
+	if s.initErr != nil {
+		return false, s.initErr
+	}
+	exists, err := s.local.Exists(ctx)
+	if err != nil || exists {
+		return exists, err
 	}
 	if s.remote != nil {
 		return s.remote.Exists(ctx)
 	}
-	return localExists, err
+	return false, nil
 }
-
-// Location retorna uma descrição clara da persistência
 func (s *SyncStorage) Location() string {
 	if s.remote != nil {
-		return fmt.Sprintf("%s (Auto-Sync Assíncrono: %s)", s.local.Location(), s.remote.Location())
+		return fmt.Sprintf("%s (sincronização: %s)", s.local.Location(), s.remote.Location())
 	}
 	return s.local.Location()
 }

@@ -8,35 +8,29 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"kofre/internal/arquivo"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
 
 // TelegramEnvelope armazena a chave dividida para desbloqueio seguro via Telegram
 type TelegramEnvelope struct {
+	DeviceID          string `json:"device_id"`
 	EncryptedVaultKey []byte `json:"encrypted_vault_key"`
 	LocalSecretBlob   []byte `json:"local_secret_blob"`
 }
 
 func getTelegramEnvelopePath() (string, error) {
-	appData := os.Getenv("APPDATA")
-	if appData != "" {
-		dir := filepath.Join(appData, "Kofre")
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return "", err
-		}
-		return filepath.Join(dir, "telegram_envelope.json"), nil
-	}
-
-	home, err := os.UserHomeDir()
+	dir, err := os.UserConfigDir()
 	if err != nil {
-		home = os.TempDir()
+		return "", err
 	}
-	dir := filepath.Join(home, ".config", "Kofre")
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	dir = filepath.Join(dir, "Kofre")
+	if err = os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "telegram_envelope.json"), nil
@@ -54,7 +48,7 @@ func HasTelegramUnlockEnvelope() bool {
 
 // SaveTelegramUnlockEnvelope cria o envelope split-key e envia a metade remota para o Kofre Cloud
 func SaveTelegramUnlockEnvelope(vaultKey []byte, kofreToken, endpoint string) error {
-	if len(vaultKey) == 0 || kofreToken == "" {
+	if len(vaultKey) != KeyLength || kofreToken == "" {
 		return errors.New("chave do cofre ou token ausente")
 	}
 
@@ -71,29 +65,6 @@ func SaveTelegramUnlockEnvelope(vaultKey []byte, kofreToken, endpoint string) er
 	defer ZeroBytes(serverSecret)
 
 	serverSecretHex := hex.EncodeToString(serverSecret)
-
-	// 2. Envia a metade remota para o servidor associado ao perfil do Telegram
-	url := fmt.Sprintf("%s/v1/telegram/unlock-key", strings.TrimRight(endpoint, "/"))
-	body, _ := json.Marshal(map[string]string{
-		"unlock_key": serverSecretHex,
-	})
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", kofreToken))
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 8 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("falha ao registrar chave no Kofre Cloud: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("servidor recusou chave (HTTP %d)", resp.StatusCode)
-	}
 
 	// 3. Deriva chave combinada do envelope: SHA256(localSecret + serverSecret)
 	combined := append(append([]byte(nil), localSecret...), serverSecret...)
@@ -113,10 +84,19 @@ func SaveTelegramUnlockEnvelope(vaultKey []byte, kofreToken, endpoint string) er
 	if err == nil {
 		localSecretBlob = dpapiBytes
 	} else {
+		if runtime.GOOS == "windows" {
+			return fmt.Errorf("falha ao proteger segredo local: %w", err)
+		}
 		localSecretBlob = append([]byte(nil), localSecret...)
 	}
 
+	deviceBytes := make([]byte, 16)
+	if _, err := rand.Read(deviceBytes); err != nil {
+		return err
+	}
+	deviceID := hex.EncodeToString(deviceBytes)
 	env := TelegramEnvelope{
+		DeviceID:          deviceID,
 		EncryptedVaultKey: encryptedVaultKey,
 		LocalSecretBlob:   localSecretBlob,
 	}
@@ -130,13 +110,46 @@ func SaveTelegramUnlockEnvelope(vaultKey []byte, kofreToken, endpoint string) er
 	if err != nil {
 		return err
 	}
+	previousDeviceID := TelegramEnvelopeDeviceID()
 
-	if err := os.WriteFile(path, envData, 0600); err != nil {
+	// 2. Envia a metade remota para o servidor associado ao perfil do Telegram
+	url := fmt.Sprintf("%s/v1/telegram/unlock-key", strings.TrimRight(endpoint, "/"))
+	body, _ := json.Marshal(map[string]string{
+		"unlock_key": serverSecretHex,
+		"device_id":  deviceID,
+	})
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
 		return err
 	}
-	_ = RestrictFilePermissions(path)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", kofreToken))
+	req.Header.Set("Content-Type", "application/json")
 
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("falha ao registrar chave no Kofre Cloud: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("servidor recusou chave (HTTP %d)", resp.StatusCode)
+	}
+
+	if err = arquivo.Gravar(path, envData, RestrictFilePermissions); err != nil {
+		return err
+	}
+	if previousDeviceID != "" {
+		cleanupReq, err := http.NewRequest(http.MethodDelete, strings.TrimRight(endpoint, "/")+"/v1/telegram/unlock-key/"+previousDeviceID, nil)
+		if err == nil {
+			cleanupReq.Header.Set("Authorization", "Bearer "+kofreToken)
+			if cleanupResp, err := client.Do(cleanupReq); err == nil {
+				cleanupResp.Body.Close()
+			}
+		}
+	}
 	return nil
+
 }
 
 // OpenTelegramUnlockEnvelope reconstrói a chave do cofre usando o segredo devolvido pelo Telegram
@@ -171,6 +184,9 @@ func OpenTelegramUnlockEnvelope(serverSecretHex string) ([]byte, error) {
 	if err == nil {
 		localSecret = decBytes
 	} else {
+		if runtime.GOOS == "windows" {
+			return nil, fmt.Errorf("falha ao abrir segredo local: %w", err)
+		}
 		localSecret = append([]byte(nil), env.LocalSecretBlob...)
 	}
 	defer ZeroBytes(localSecret)
@@ -188,4 +204,21 @@ func OpenTelegramUnlockEnvelope(serverSecretHex string) ([]byte, error) {
 	}
 
 	return vaultKey, nil
+}
+
+// TelegramEnvelopeDeviceID retorna vazio para envelope ausente ou legado.
+func TelegramEnvelopeDeviceID() string {
+	path, err := getTelegramEnvelopePath()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var env TelegramEnvelope
+	if json.Unmarshal(data, &env) != nil || len(env.DeviceID) != 32 {
+		return ""
+	}
+	return env.DeviceID
 }

@@ -4,8 +4,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"kofre/internal/arquivo"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	mycrypto "kofre/pkg/crypto"
@@ -19,13 +21,13 @@ var (
 
 // AppConfig armazena as configuracoes do usuario
 type AppConfig struct {
-	Mode          string `json:"mode"`                     // "local" ou "cloud"
-	VaultPath     string `json:"vault_path"`                // caminho do arquivo local
-	CloudEnabled  bool   `json:"cloud_enabled"`            // se sincronizacao com S3 esta ativa
+	Mode          string `json:"mode"`          // "local" ou "cloud"
+	VaultPath     string `json:"vault_path"`    // caminho do arquivo local
+	CloudEnabled  bool   `json:"cloud_enabled"` // se sincronizacao com S3 esta ativa
 	S3Bucket      string `json:"s3_bucket"`
 	S3Key         string `json:"s3_key"`
 	S3Region      string `json:"s3_region"`
-	S3Endpoint    string `json:"s3_endpoint"`              // para Cloudflare R2 ou MinIO
+	S3Endpoint    string `json:"s3_endpoint"` // para Cloudflare R2 ou MinIO
 	S3AccessKey   string `json:"s3_access_key,omitempty"`
 	S3SecretKey   string `json:"s3_secret_key,omitempty"`
 	CloudEndpoint string `json:"cloud_endpoint,omitempty"` // URL da API (ex: https://api.kofre.dev)
@@ -148,6 +150,8 @@ func SaveConfig(cfg *AppConfig) error {
 	if persisted.KofreToken != "" && !strings.HasPrefix(persisted.KofreToken, "enc:dpapi:") {
 		if encBytes, err := mycrypto.EncryptWithDPAPI([]byte(persisted.KofreToken)); err == nil {
 			persisted.KofreToken = "enc:dpapi:" + hex.EncodeToString(encBytes)
+		} else if runtime.GOOS == "windows" {
+			return fmt.Errorf("falha ao proteger token: %w", err)
 		}
 	}
 
@@ -157,11 +161,7 @@ func SaveConfig(cfg *AppConfig) error {
 		return err
 	}
 
-	if err := os.WriteFile(cfgPath, data, 0600); err != nil {
-		return err
-	}
-	_ = mycrypto.RestrictFilePermissions(cfgPath)
-	return nil
+	return arquivo.Gravar(cfgPath, data, mycrypto.RestrictFilePermissions)
 }
 
 // DefaultConfig gera a configuracao padrao inicial
