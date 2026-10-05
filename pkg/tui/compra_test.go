@@ -107,6 +107,19 @@ func TestCompraNaTUIPreservaArquivoLocalEIsolaSandbox(t *testing.T) {
 			}
 			after, _ := os.ReadFile(filepath.Join(configDir, "config.json"))
 			if sandbox {
+				if !m.compraTesteConfirmada {
+					t.Fatal("confirmação Sandbox não permaneceu no aplicativo")
+				}
+				next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+				m = next.(Model)
+				if !strings.Contains(m.View(), "Pagamento de teste confirmado") {
+					t.Fatal("tela Pro perdeu a confirmação do simulador")
+				}
+				next, command := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				m = next.(Model)
+				if command != nil || m.compraEmAndamento {
+					t.Fatal("Enter abriu nova compra após confirmação Sandbox")
+				}
 				if !bytes.Equal(before, after) || m.storage != local {
 					t.Fatal("Sandbox alterou conta ou storage")
 				}

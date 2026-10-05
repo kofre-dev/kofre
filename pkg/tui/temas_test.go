@@ -2,6 +2,7 @@ package tui
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -23,8 +24,7 @@ func TestTemasPreviaCancelarSalvarERetomar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewModel(store)
-	defer m.Close()
+	m := fixtureModel(t)
 	outro := NewModel(store)
 	defer outro.Close()
 	m.passInput.SetValue("senha-preservada")
@@ -54,8 +54,34 @@ func TestTemasPreviaCancelarSalvarERetomar(t *testing.T) {
 	}
 	reopened := NewModel(store)
 	defer reopened.Close()
-	if reopened.cores().ID != "violeta" || m.state != ViewUnlock || m.mostrarTemas {
+	if reopened.cores().ID != "violeta" || m.state != ViewList || m.mostrarTemas {
 		t.Fatal("tema não restaurou ou seleção alterou navegação")
+	}
+}
+
+func TestTemasSomenteComCofreDesbloqueado(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, estado := range []ViewState{ViewUnlock, ViewPro, ViewTelegramChallenge} {
+		m := Model{state: estado, passInput: newInput(true)}
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyF2})
+		if next.(Model).mostrarTemas {
+			t.Fatal("F2 abriu temas com cofre bloqueado")
+		}
+		if estado != ViewTelegramChallenge && strings.Contains(m.View(), "[F2]") {
+			t.Fatal("atalho de temas visível com cofre bloqueado")
+		}
+	}
+	m := fixtureModel(t)
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyF2})
+	m = next.(Model)
+	if !m.mostrarTemas {
+		t.Fatal("F2 não abriu temas depois de entrar")
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	m = next.(Model)
+	if m.mostrarTemas || m.state != ViewUnlock {
+		t.Fatal("bloquear deixou seletor de temas aberto")
 	}
 }
 

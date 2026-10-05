@@ -76,7 +76,7 @@ func (m Model) painelAcesso() string {
 			link = lipgloss.NewStyle().Foreground(m.cores().Destaque).Render("Telegram  [Ctrl+T]")
 		}
 	}
-	sair := lipgloss.NewStyle().Foreground(m.cores().Suave).Render("[F2] Temas  [Esc] Sair")
+	sair := lipgloss.NewStyle().Foreground(m.cores().Suave).Render("[Esc] Sair")
 	if conteudo >= lipgloss.Width(link)+lipgloss.Width(sair)+2 {
 		b.WriteString(link + strings.Repeat(" ", conteudo-lipgloss.Width(link)-lipgloss.Width(sair)) + sair)
 	} else {

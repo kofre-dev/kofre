@@ -108,6 +108,7 @@ func (m Model) receberConclusaoCompra(msg compraConcluidaMsg) (tea.Model, tea.Cm
 	if msg.resultado.Status == "sandbox_confirmed" && msg.resultado.Sandbox {
 		sessao := m.compraSessao
 		m.encerrarEsperaCompra()
+		m.compraTesteConfirmada = true
 		return m, tea.Batch(m.notify("Compra de homologação confirmada. Sua conta e o cofre continuam como estavam; Sandbox não ativa Pro real."), confirmarCompraCmd(sessao))
 	}
 	if msg.resultado.Status != "active" || msg.resultado.Sandbox {

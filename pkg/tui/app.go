@@ -104,12 +104,13 @@ type Model struct {
 	confirmPassInput input
 	changePassFocus  int
 
-	width             int
-	height            int
-	compraEmAndamento bool
-	compraCancel      context.CancelFunc
-	compraSessao      *compra.Sessao
-	compraGeracao     uint64
+	width                 int
+	height                int
+	compraEmAndamento     bool
+	compraTesteConfirmada bool
+	compraCancel          context.CancelFunc
+	compraSessao          *compra.Sessao
+	compraGeracao         uint64
 }
 
 func NewModel(store storage.StorageProvider) Model {
@@ -213,7 +214,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mostrarTemas && msg.Type != tea.KeyCtrlC && msg.Type != tea.KeyCtrlL {
 			return m.atualizarTemas(msg)
 		}
-		if msg.Type == tea.KeyF2 {
+		if msg.Type == tea.KeyF2 && m.vault != nil {
 			m.mostrarTemas = true
 			m.temaCursor = indiceTema(m.temaID)
 			return m, nil
@@ -387,6 +388,7 @@ func (m *Model) clearForm() {
 
 func (m *Model) lock() {
 	m.showHelp = false
+	m.mostrarTemas = false
 	if m.vault != nil && m.vault.IsDirty() {
 		m.err = fmt.Errorf("cofre bloqueado; alteracoes que falharam ao gravar foram descartadas")
 	}
@@ -1393,6 +1395,15 @@ func isProPlan() bool {
 }
 
 func (m Model) updatePro(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.compraTesteConfirmada && !isProPlan() {
+		if msg.Type == tea.KeyEnter {
+			return m, nil
+		}
+		if msg.String() == "n" {
+			m.compraTesteConfirmada = false
+			return m.iniciarCompra()
+		}
+	}
 	if msg.String() == "x" && m.compraEmAndamento {
 		m.encerrarEsperaCompra()
 		m.err = errors.New("Espera interrompida. Se você já pagou, consulte o pedido no site.")

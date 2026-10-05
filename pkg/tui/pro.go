@@ -20,6 +20,13 @@ func (m Model) painelPro() string {
 		b.WriteString(texto.Render("Acesso à nuvem conforme a validade da licença.") + "\n")
 		b.WriteString(texto.Render("O cofre local continua disponível.") + "\n\n")
 		b.WriteString(botao.Render("Voltar ao cofre  [Enter]  →"))
+	} else if m.compraTesteConfirmada {
+		b.WriteString(centro.Foreground(m.cores().Sucesso).Render("Pagamento de teste confirmado") + "\n\n")
+		b.WriteString(texto.Render("O Kofre recebeu a confirmação do simulador.") + "\n\n")
+		b.WriteString(texto.Render("Este pagamento testa o fluxo de compra.") + "\n")
+		b.WriteString(texto.Render("Ele não ativa Pro na nuvem de produção.") + "\n\n")
+		b.WriteString(texto.Render("Você não precisa fazer outro pedido.") + "\n\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(m.cores().Destaque).Render("[n] Iniciar outro teste"))
 	} else if m.compraEmAndamento {
 		b.WriteString(centro.Foreground(m.cores().Sucesso).Render("Aguardando confirmação") + "\n\n")
 		b.WriteString(texto.Render("Continue a compra no navegador.") + "\n")
@@ -46,6 +53,9 @@ func (m Model) painelPro() string {
 	if m.compraEmAndamento && !isProPlan() {
 		voltar = "[Esc] Usar o cofre enquanto aguarda"
 	}
-	b.WriteString("\n" + texto.Render("[F2] Temas  ·  "+voltar))
+	if m.vault != nil {
+		voltar = "[F2] Temas  ·  " + voltar
+	}
+	b.WriteString("\n" + texto.Render(voltar))
 	return lipgloss.NewStyle().Width(largura).Padding(1, 3).Border(lipgloss.RoundedBorder()).BorderForeground(m.cores().Destaque).Render(b.String())
 }
