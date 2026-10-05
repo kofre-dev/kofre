@@ -1,11 +1,63 @@
 package tui
 
 import (
+	"bytes"
 	tea "github.com/charmbracelet/bubbletea"
+	"kofre/pkg/config"
 	mycrypto "kofre/pkg/crypto"
 	"kofre/pkg/vault"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestTrocaSenhaFalhaTelegramMantemNovaSenhaEInformaRecuperacao(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("APPDATA", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "falha fictícia", 503) }))
+	defer endpoint.Close()
+	t.Setenv("KOFRE_CLOUD_ENDPOINT", endpoint.URL)
+	cfg := config.DefaultConfig()
+	cfg.CloudEnabled = true
+	cfg.Mode = "kofre_cloud"
+	cfg.KofreToken = "kfr_licenca_ficticia"
+	cfg.CloudEndpoint = endpoint.URL
+	if err := config.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	envelopePath := filepath.Join(dir, "Kofre", "telegram_envelope.json")
+	previous := []byte(`{"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)
+	if err := os.WriteFile(envelopePath, previous, 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := fixtureModel(t)
+	defer m.Close()
+	m.initChangePasswordForm()
+	m.state = ViewChangePassword
+	m.changePassFocus = 1
+	m.newPassInput.SetValue("nova-senha-ficticia")
+	m.confirmPassInput.SetValue("nova-senha-ficticia")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.err != nil || m.state != ViewList || !strings.Contains(m.notification, "Telegram pendente") {
+		t.Fatalf("troca confirmada não informou recuperação: estado=%d erro=%v aviso=%q", m.state, m.err, m.notification)
+	}
+	got, err := os.ReadFile(envelopePath)
+	if err != nil || !bytes.Equal(got, previous) {
+		t.Fatal("falha remota destruiu envelope anterior")
+	}
+	m.lock()
+	m.passInput.SetValue("nova-senha-ficticia")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.state != ViewList || m.err != nil {
+		t.Fatal("nova senha não abre o cofre após falha do Telegram")
+	}
+}
 
 func TestChangeMasterPasswordFullCycle(t *testing.T) {
 	// 1. Inicializa o cofre com a senha inicial

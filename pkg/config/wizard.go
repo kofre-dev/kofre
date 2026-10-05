@@ -38,7 +38,10 @@ func RunInteractiveConfig() error {
 		cfg.CloudEnabled = true
 		fmt.Print("\nDigite seu Token do Kofre Cloud (ex: kfr_live_...): ")
 		token, _ := reader.ReadString('\n')
-		cfg.TelegramBot = strings.TrimSpace(token)
+		cfg.KofreToken = strings.TrimSpace(token)
+		if err := ValidateCloudLicense(GetCloudEndpoint(), cfg.KofreToken); err != nil {
+			return err
+		}
 		fmt.Println("✓ Kofre Cloud configurado!")
 
 	case "3":

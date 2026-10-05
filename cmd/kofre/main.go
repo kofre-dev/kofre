@@ -9,12 +9,14 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kofre/pkg/compra"
 	"kofre/pkg/config"
 	mycrypto "kofre/pkg/crypto"
 	"kofre/pkg/importer"
@@ -41,7 +43,7 @@ func printHelp() {
   kofre pull              Baixa o cofre mais recente do S3 / Cloud para o PC
   kofre import <txt>      Importador inteligente de arquivos .txt desformatados
   kofre update            Verifica e aplica atualizações mais recentes do binário
-  kofre pro               Ativa a assinatura Kofre Cloud Pro (Modo Piloto)
+  kofre pro               Abre a compra Pro e ativa a licença automaticamente
   kofre version           Exibe a versão do executável Kofre
   kofre backup [pasta]    Gera uma cópia de backup criptografada com timestamp
   kofre restore <arquivo> Restaura o cofre a partir de um backup validado
@@ -246,8 +248,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Erro na execução do Kofre: %v\n", err)
 		os.Exit(1)
 	}
-	if syncer, ok := store.(interface{ Flush(time.Duration) }); ok {
-		syncer.Flush(3 * time.Second)
+	if syncer, ok := store.(interface{ Flush(time.Duration) error }); ok {
+		if err := syncer.Flush(3 * time.Second); err != nil {
+			fmt.Fprintln(os.Stderr, "Sincronização pendente:", err)
+		}
+		if closer, ok := store.(interface{ Close() }); ok {
+			closer.Close()
+		}
 	}
 }
 
@@ -336,6 +343,10 @@ func handleLogin(args []string) {
 		endpoint = strings.TrimSpace(args[1])
 	}
 
+	if err := config.ValidateCloudLicense(endpoint, token); err != nil {
+		fmt.Fprintln(os.Stderr, "Não foi possível validar a licença:", err)
+		os.Exit(1)
+	}
 	cfg.Mode = "kofre_cloud"
 	cfg.CloudEnabled = true
 	cfg.KofreToken = token
@@ -692,69 +703,48 @@ func handleUpdate() {
 }
 
 func handlePro() {
-	cfg, _ := config.LoadConfig()
-	if cfg == nil {
-		cfg = config.DefaultConfig()
-	}
-
-	endpoint := config.GetCloudEndpoint()
-
-	fmt.Println("🚀 Ativando Kofre Cloud Pro (Modo Piloto)...")
-	provisionURL := fmt.Sprintf("%s/v1/auth/provision", strings.TrimRight(endpoint, "/"))
-
-	resp, err := http.Post(provisionURL, "application/json", nil)
+	cfg, err := config.LoadConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Erro ao conectar à API: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, "Falha ao ler configuração:", err)
+		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "Falha na ativação (HTTP %d): %s\n", resp.StatusCode, string(body))
-		os.Exit(1)
+	if cfg.CloudEnabled {
+		fmt.Println("Já existe nuvem configurada. Consulte planos e pedidos em https://kofre.dev/comprar; sua conta foi preservada.")
+		return
 	}
-
-	var res struct {
-		Token   string `json:"token"`
-		Plan    string `json:"plan"`
-		Message string `json:"message"`
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	hostname, _ := os.Hostname()
+	endpoint := config.GetCloudEndpoint()
+	sessao, err := compra.Iniciar(ctx, endpoint, hostname)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Não foi possível iniciar a compra:", err)
+		return
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		fmt.Fprintf(os.Stderr, "Erro ao processar resposta: %v\n", err)
-		os.Exit(1)
+	defer sessao.Close()
+	fmt.Println("Abrindo a compra no navegador. Após pagar, a licença será ativada automaticamente.")
+	if err = compra.AbrirNavegador(sessao.URL); err != nil {
+		fmt.Println("Abra este endereço no navegador:", sessao.URL)
 	}
-
-	cfg.Mode = "kofre_cloud"
-	cfg.CloudEnabled = true
-	cfg.KofreToken = res.Token
-	cfg.CloudEndpoint = endpoint
-
-	if err := config.SaveConfig(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Erro ao salvar configuração: %v\n", err)
-		os.Exit(1)
+	fmt.Println("Aguardando confirmação. Ctrl+C interrompe a espera; o uso local permanece gratuito.")
+	resultado, err := sessao.Aguardar(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Ativação não concluída:", err)
+		return
 	}
-
-	fmt.Println("✓ Licença Kofre Cloud Pro ativada com sucesso!")
-	fmt.Printf("  • Token:     %s\n", res.Token)
-	fmt.Printf("  • Endpoint:  %s\n", endpoint)
-	fmt.Println()
-
-	// Sincroniza o cofre local existente se houver
-	vaultPath := resolveVaultPath("")
-	if data, err := os.ReadFile(vaultPath); err == nil && len(data) >= 60 {
-		fmt.Println("Sincronizando cofre local com a nuvem...")
-		cloudStore := storage.NewKofreCloudStorage(endpoint, res.Token)
-		ctx := context.Background()
-		if err := cloudStore.Save(ctx, data); err == nil {
-			fmt.Println("✓ Cofre sincronizado com a nuvem em segurança!")
-		} else {
-			fmt.Printf("⚠️  Aviso: falha na sincronização inicial: %v\n", err)
-		}
+	if resultado.Sandbox {
+		fmt.Println("Compra de homologação confirmada. Nenhuma licença real foi salva; seu cofre e sua conta foram preservados.")
+		_ = sessao.Confirmar(ctx)
+		return
 	}
-
-	fmt.Println()
-	fmt.Println("Dica: Use 'kofre telegram' para vincular alertas e desbloqueio remoto com timeout.")
+	if err = config.AtivarLicencaComprada(endpoint, resultado.Token); err != nil {
+		fmt.Fprintln(os.Stderr, "Pagamento confirmado, mas não foi possível salvar a licença:", err)
+		fmt.Println("Recupere a licença no pedido em https://kofre.dev/comprar.")
+		return
+	}
+	_ = sessao.Confirmar(ctx)
+	fmt.Println("Pro ativado automaticamente! Seu cofre local e sua senha mestra foram preservados.")
+	fmt.Println("Abra o Kofre para usar a sincronização. A licença também pode ser recuperada na página do pedido.")
 }
 
 func handleTelegramLink() {
@@ -864,4 +854,3 @@ func handleTelegramSetupUnlock() {
 	fmt.Println("  3. Toque em [ ✅ Autorizar Desbloqueio ] no Telegram do seu celular")
 	fmt.Println("  4. O Kofre abrirá IMEDIATAMENTE na sua lista de segredos sem pedir senha!")
 }
-

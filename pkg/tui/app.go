@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"kofre/pkg/compra"
 	"kofre/pkg/config"
 	mycrypto "kofre/pkg/crypto"
 	"kofre/pkg/storage"
@@ -60,6 +61,7 @@ type Model struct {
 
 	// Desafio Telegram com Timeout
 	challengeID        string
+	challengeToken     string
 	challengeCodeInput textinput.Model
 	challengeExpiresAt time.Time
 	challengeSeconds   int
@@ -98,14 +100,18 @@ type Model struct {
 	confirmPassInput input
 	changePassFocus  int
 
-	width  int
-	height int
+	width             int
+	height            int
+	compraEmAndamento bool
+	compraCancel      context.CancelFunc
+	compraSessao      *compra.Sessao
+	compraGeracao     uint64
 }
 
 func NewModel(store storage.StorageProvider) Model {
 	mycrypto.ProtectProcess()
 	ctx := context.Background()
-	exists, _ := store.Exists(ctx)
+	exists, existsErr := store.Exists(ctx)
 
 	// Input de desbloqueio
 	pi := newInput(true)
@@ -122,7 +128,8 @@ func NewModel(store storage.StorageProvider) Model {
 	m := Model{
 		storage:       store,
 		state:         ViewUnlock,
-		isNewVault:    !exists,
+		isNewVault:    !exists && existsErr == nil,
+		err:           existsErr,
 		passInput:     pi,
 		searchInput:   si,
 		searchFocused: false,
@@ -187,6 +194,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		m.lastActivity = time.Now()
+		if msg.Type == tea.KeyCtrlP && (m.state == ViewList || m.state == ViewUnlock || m.state == ViewDetail) {
+			m.previousState = m.state
+			m.state = ViewPro
+			m.err = nil
+			return m, nil
+		}
 		if msg.Type == tea.KeyCtrlL && m.vault != nil {
 			m.lock()
 			return m, nil
@@ -245,6 +258,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case challengePollMsg:
 		if m.state == ViewTelegramChallenge {
+			if msg.err != nil {
+				m.err = msg.err
+			}
 			if msg.status == "approved" {
 				return m.finishTelegramUnlock(msg.unlockSecret)
 			} else if msg.status == "rejected" {
@@ -260,11 +276,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.pollChallengeStatus(m.challengeID, ep)
 		}
 
+	case compraIniciadaMsg:
+		return m.receberInicioCompra(msg)
+	case compraConcluidaMsg:
+		return m.receberConclusaoCompra(msg)
 	case telegramEnvelopeSavedMsg:
 		if msg.err == nil {
 			return m, m.notify("✓ Desbloqueio direto por Telegram ATIVADO! Acesso sem senha liberado.")
 		}
-		return m, nil
+		return m, m.notify("Cofre aberto. Telegram não configurado: " + msg.err.Error())
 	case ephemeralRevealDoneMsg:
 		m.revealed = false
 		return m, nil
@@ -387,9 +407,15 @@ func (m *Model) notify(msg string) tea.Cmd {
 }
 
 func (m *Model) cleanup() {
+	m.encerrarEsperaCompra()
 	m.lock()
-	if syncer, ok := m.storage.(interface{ Flush(time.Duration) }); ok {
-		syncer.Flush(3 * time.Second)
+	if syncer, ok := m.storage.(interface{ Flush(time.Duration) error }); ok {
+		if err := syncer.Flush(3 * time.Second); err != nil {
+			fmt.Fprintln(os.Stderr, "Sincronização pendente:", err)
+		}
+		if closer, ok := m.storage.(interface{ Close() }); ok {
+			closer.Close()
+		}
 	}
 }
 
@@ -487,19 +513,9 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		// Provisiona o envelope do Telegram para futuros desbloqueios sem senha
 		var unlockCmd tea.Cmd = m.notify("✓ Cofre desbloqueado em memoria RAM")
-		if cfg, _ := config.LoadConfig(); cfg != nil && cfg.CloudEnabled && cfg.KofreToken != "" {
+		if cfg, _ := config.LoadConfig(); cfg != nil && cfg.CloudEnabled && cfg.KofreToken != "" && mycrypto.TelegramEnvelopeDeviceID() == "" {
 			keyCopy := append([]byte(nil), key...)
-			if !mycrypto.HasTelegramUnlockEnvelope() {
-				unlockCmd = tea.Batch(
-					m.notify("✓ Cofre aberto! Ativando desbloqueio rápido por Telegram..."),
-					saveTelegramEnvelopeCmd(keyCopy, cfg.KofreToken, config.GetCloudEndpoint()),
-				)
-			} else {
-				go func(k []byte, tok, ep string) {
-					defer mycrypto.ZeroBytes(k)
-					_ = mycrypto.SaveTelegramUnlockEnvelope(k, tok, ep)
-				}(keyCopy, cfg.KofreToken, config.GetCloudEndpoint())
-			}
+			unlockCmd = tea.Batch(m.notify("Cofre aberto. Registrando envelope do Telegram..."), saveTelegramEnvelopeCmd(keyCopy, cfg.KofreToken, config.GetCloudEndpoint()))
 		}
 
 		return m, unlockCmd
@@ -531,7 +547,8 @@ func (m *Model) startTelegramChallenge() (tea.Model, tea.Cmd) {
 	endpoint := config.GetCloudEndpoint()
 
 	url := fmt.Sprintf("%s/v1/auth/telegram-challenge", strings.TrimRight(endpoint, "/"))
-	req, err := http.NewRequest(http.MethodPost, url, nil)
+	body, _ := json.Marshal(map[string]string{"device_id": mycrypto.TelegramEnvelopeDeviceID()})
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		m.err = err
 		return *m, nil
@@ -566,6 +583,7 @@ func (m *Model) startTelegramChallenge() (tea.Model, tea.Cmd) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&res)
 
+	m.challengeToken = cfg.KofreToken
 	m.challengeID = res.ChallengeID
 	m.challengeSeconds = res.TimeoutSeconds
 	m.challengeExpiresAt, _ = time.Parse(time.RFC3339, res.ExpiresAt)
@@ -595,11 +613,22 @@ func (m Model) pollChallengeStatus(id, endpoint string) tea.Cmd {
 	return tea.Tick(1500*time.Millisecond, func(t time.Time) tea.Msg {
 		url := fmt.Sprintf("%s/v1/auth/telegram-challenge/status?id=%s", strings.TrimRight(endpoint, "/"), id)
 		client := &http.Client{Timeout: 3 * time.Second}
-		resp, err := client.Get(url)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return challengePollMsg{err: err}
+		}
+		req.Header.Set("Authorization", "Bearer "+m.challengeToken)
+		resp, err := client.Do(req)
 		if err != nil {
 			return challengePollMsg{err: err}
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			if resp.StatusCode == 404 {
+				return challengePollMsg{status: "expired"}
+			}
+			return challengePollMsg{err: fmt.Errorf("desafio não autorizado (HTTP %d)", resp.StatusCode)}
+		}
 
 		var res struct {
 			Status       string `json:"status"`
@@ -631,7 +660,14 @@ func (m Model) updateTelegramChallenge(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			"code":         code,
 		})
 		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+m.challengeToken)
+		resp, err := client.Do(req)
 		if err != nil {
 			m.err = fmt.Errorf("falha ao verificar código: %w", err)
 			return m, nil
@@ -681,7 +717,14 @@ func (m Model) finishTelegramUnlock(unlockSecret string) (tea.Model, tea.Cmd) {
 				if err == nil {
 					v, err := vault.DecryptAndLoad(encryptedPayload, vaultKey, salt)
 					if err == nil {
-						m.sessionKey, _ = mycrypto.SealMemory(vaultKey)
+						sealed, sealErr := mycrypto.SealMemory(vaultKey)
+						if sealErr != nil {
+							v.Close()
+							m.state = ViewUnlock
+							m.err = sealErr
+							return m, nil
+						}
+						m.sessionKey = sealed
 						m.salt = salt
 						m.vault = v
 						m.state = ViewList
@@ -1326,6 +1369,17 @@ func isProPlan() bool {
 }
 
 func (m Model) updatePro(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "x" && m.compraEmAndamento {
+		m.encerrarEsperaCompra()
+		m.err = errors.New("Espera interrompida. Se você já pagou, consulte o pedido no site.")
+		return m, nil
+	}
+	if msg.String() == "r" && m.compraSessao != nil {
+		if err := abrirNavegadorCompra(m.compraSessao.URL); err != nil {
+			m.err = err
+		}
+		return m, nil
+	}
 	switch msg.Type {
 	case tea.KeyEsc:
 		if m.previousState == ViewUnlock {
@@ -1353,64 +1407,7 @@ func (m Model) updatePro(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) activateProPlan() (tea.Model, tea.Cmd) {
-	cfg, _ := config.LoadConfig()
-	if cfg == nil {
-		cfg = config.DefaultConfig()
-	}
-
-	endpoint := config.GetCloudEndpoint()
-
-	provisionURL := fmt.Sprintf("%s/v1/auth/provision", strings.TrimRight(endpoint, "/"))
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(provisionURL, "application/json", nil)
-	if err != nil {
-		m.err = fmt.Errorf("falha ao ativar Pro: %w", err)
-		return m, nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		m.err = fmt.Errorf("erro do servidor: %s", string(body))
-		return m, nil
-	}
-
-	var res struct {
-		Token   string `json:"token"`
-		Plan    string `json:"plan"`
-		Message string `json:"message"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		m.err = err
-		return m, nil
-	}
-
-	cfg.Mode = "kofre_cloud"
-	cfg.CloudEnabled = true
-	cfg.KofreToken = res.Token
-	cfg.CloudEndpoint = endpoint
-	_ = config.SaveConfig(cfg)
-
-	// Embrulha o storage atual em SyncStorage
-	cloudStore := storage.NewKofreCloudStorage(endpoint, res.Token)
-	m.storage = storage.NewSyncStorage(m.storage, cloudStore)
-
-	// Sincroniza cofre para a nuvem se estiver aberto em memória
-	if m.vault != nil && m.sessionKey != nil && len(m.salt) > 0 {
-		ctx := context.Background()
-		if packed, err := m.pack(); err == nil && len(packed) >= 60 {
-			_ = m.storage.Save(ctx, packed)
-		}
-	}
-
-	if m.previousState == ViewUnlock {
-		m.state = ViewUnlock
-	} else {
-		m.state = ViewList
-		m.refreshList()
-	}
-	m.err = nil
-	return m, m.notify("🎉 Plano Cloud Pro ativado com sucesso! Nuvem Zero-Knowledge ativa.")
+	return m.iniciarCompra()
 }
 
 // ======================== VIEWS (RENDERIZACAO) ========================
@@ -1724,11 +1721,11 @@ func (m Model) viewPro() string {
 		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("║  🌟 Kofre Cloud Pro — Assinatura Ativa                       ║\n"))
 		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("╚══════════════════════════════════════════════════════════════╝\n\n"))
 
-		b.WriteString("Status:           " + lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("ATIVO (PILOTO)") + "\n")
+		b.WriteString("Status:           " + lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("LICENÇA CONFIGURADA") + "\n")
 		b.WriteString(fmt.Sprintf("Licença:          %s\n", tokenDisplay))
 		b.WriteString("Sincronização:    Nuvem S3 Criptografada (Zero-Knowledge E2EE)\n")
 		b.WriteString(fmt.Sprintf("Bot Telegram:     @%s (Alertas e Desbloqueio com Timeout)\n\n", config.GetTelegramBot()))
-		b.WriteString("Seu cofre está protegido e sincronizado continuamente com a nuvem.\n\n")
+		b.WriteString("A disponibilidade da nuvem depende da validade da licença. O cofre local continua disponível.\n\n")
 		b.WriteString(helpStyle.Render("[Enter / Esc] Voltar"))
 	} else {
 		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("╔══════════════════════════════════════════════════════════════╗\n"))
@@ -1740,11 +1737,16 @@ func (m Model) viewPro() string {
 		b.WriteString("  ✓ Acesso contínuo e sincronizado entre seus múltiplos computadores\n")
 		b.WriteString(fmt.Sprintf("  ✓ Desbloqueio e recuperação remota via Telegram com Timeout (@%s)\n", config.GetTelegramBot()))
 		b.WriteString("  ✓ Botão de Pânico no Telegram para blindagem ou bloqueio imediato\n")
-		b.WriteString("  ✓ Backups versionados contínuos no S3\n\n")
+		b.WriteString("  ✓ Sincronização do arquivo criptografado; mantenha também backups locais\n\n")
 
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")).Render("★ MODO PILOTO: Ativação instantânea liberada para testes!\n\n"))
+		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")).Render("Conheça o Pro: https://kofre.dev/comprar\nCom sua licença: kofre login <token>.\n\n"))
 
-		b.WriteString(helpStyle.Render("[Enter] Ativar Plano Cloud Pro Agora  •  [Esc] Voltar"))
+		if m.compraEmAndamento {
+			b.WriteString("Compra aberta no navegador. Após pagar, a licença chega automaticamente.\n")
+			b.WriteString(helpStyle.Render("[Esc] Usar o cofre enquanto aguarda • [r] Reabrir navegador • [x] Interromper espera"))
+		} else {
+			b.WriteString(helpStyle.Render("[Enter] Comprar no navegador • [Esc] Voltar"))
+		}
 	}
 
 	return boxStyle.Render(b.String())
@@ -1834,6 +1836,9 @@ func (m Model) updateChangePassword(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirmPassInput.Reset()
 		m.state = ViewList
 		m.err = nil
+		if strings.HasPrefix(m.notification, "Senha alterada. Telegram pendente:") {
+			return m, m.notify(m.notification)
+		}
 		return m, m.notify("✓ Senha mestre alterada com sucesso! Cofre recriptografado com novo salt.")
 	}
 
@@ -1863,16 +1868,21 @@ func (m *Model) changePassword(newPass []byte) error {
 		return fmt.Errorf("falha ao recriptografar cofre: %w", err)
 	}
 
-	// Salva na persistência ativa (disco / cloud / sync)
-	ctx := context.Background()
-	if err := m.storage.Save(ctx, packed); err != nil {
-		return fmt.Errorf("falha ao salvar cofre: %w", err)
-	}
-
 	// Atualiza chaves na sessão da memória RAM
 	newSealedKey, err := mycrypto.SealMemory(newKey)
 	if err != nil {
 		return fmt.Errorf("falha ao proteger nova chave na memória: %w", err)
+	}
+
+	defer func() {
+		if newSealedKey != m.sessionKey {
+			newSealedKey.Close()
+		}
+	}()
+	// Salva na persistência ativa (disco / cloud / sync)
+	ctx := context.Background()
+	if err := m.storage.Save(ctx, packed); err != nil {
+		return fmt.Errorf("falha ao salvar cofre: %w", err)
 	}
 
 	if m.sessionKey != nil {
@@ -1882,14 +1892,10 @@ func (m *Model) changePassword(newPass []byte) error {
 	m.salt = newSalt
 	m.vault.MarkClean()
 
-	// Se o Telegram Split-Key estiver ativo, atualiza o envelope com a nova chave
-	if cfg, _ := config.LoadConfig(); cfg != nil && cfg.CloudEnabled && cfg.KofreToken != "" {
-		if mycrypto.HasTelegramUnlockEnvelope() {
-			keyCopy := append([]byte(nil), newKey...)
-			go func(k []byte, tok, ep string) {
-				defer mycrypto.ZeroBytes(k)
-				_ = mycrypto.SaveTelegramUnlockEnvelope(k, tok, ep)
-			}(keyCopy, cfg.KofreToken, config.GetCloudEndpoint())
+	// A nova senha já está persistida; uma falha do Telegram não pode ser apresentada como rollback.
+	if cfg, _ := config.LoadConfig(); cfg != nil && cfg.CloudEnabled && cfg.KofreToken != "" && mycrypto.HasTelegramUnlockEnvelope() {
+		if err := mycrypto.SaveTelegramUnlockEnvelope(newKey, cfg.KofreToken, config.GetCloudEndpoint()); err != nil {
+			m.notification = "Senha alterada. Telegram pendente: use a nova senha e execute kofre telegram setup-unlock."
 		}
 	}
 
@@ -1926,4 +1932,3 @@ func (m Model) viewChangePassword() string {
 
 	return boxStyle.Render(b.String())
 }
-
