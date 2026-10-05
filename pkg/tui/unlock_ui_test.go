@@ -55,3 +55,29 @@ func TestAtivarProCliqueComAvisos(t *testing.T) {
 		m.passInput.Reset()
 	}
 }
+
+func TestAcessoCabeNaJanela(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, tamanho := range [][2]int{{40, 24}, {60, 24}, {80, 24}, {80, 40}, {120, 40}} {
+		m := Model{state: ViewUnlock, passInput: newInput(true), width: tamanho[0], height: tamanho[1]}
+		m.passInput.SetValue(strings.Repeat("senha-privada", 20))
+		view := ansi.Strip(m.View())
+		if lipgloss.Width(view) > m.width || lipgloss.Height(view) > m.height {
+			t.Fatalf("layout excedeu janela %dx%d: %dx%d", m.width, m.height, lipgloss.Width(view), lipgloss.Height(view))
+		}
+		if strings.Contains(view, "senha-privada") {
+			t.Fatal("senha exposta na renderização")
+		}
+		x, y := -1, -1
+		for linha, texto := range strings.Split(view, "\n") {
+			if pos := strings.Index(texto, botaoAtivarPro); pos >= 0 {
+				x, y = lipgloss.Width(texto[:pos]), linha
+			}
+		}
+		if x < 0 || !m.clicouAtivarPro(x, y) {
+			t.Fatal("ação Pro inacessível após centralização")
+		}
+		m.passInput.Reset()
+	}
+}

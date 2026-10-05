@@ -116,7 +116,7 @@ func NewModel(store storage.StorageProvider) Model {
 
 	// Input de desbloqueio
 	pi := newInput(true)
-	pi.Placeholder = "Digite seu PIN ou senha mestre"
+	pi.Placeholder = "_"
 	pi.EchoMode = textinput.EchoPassword
 	pi.EchoCharacter = '•'
 	pi.Focus()
@@ -1459,6 +1459,9 @@ func (m Model) View() string {
 }
 
 func (m Model) renderHeader() string {
+	if m.state == ViewUnlock || m.state == ViewPro {
+		return m.cabecalhoAcesso()
+	}
 	isUnlocked := m.state != ViewUnlock && m.state != ViewTelegramChallenge && m.state != ViewPro
 
 	lockText := "🔒 TRANCADO"
@@ -1485,34 +1488,10 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) viewUnlock() string {
-	var b strings.Builder
-	if m.isNewVault {
-		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Criar seu cofre"))
-		b.WriteString("\nDefina seu PIN ou senha mestra.\n\n")
-	} else {
-		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Abrir seu cofre"))
-		b.WriteString("\nDigite seu PIN ou senha mestra.\n\n")
-	}
-	b.WriteString(m.passInput.View())
-	b.WriteString("\n\n")
-	acao := "Abrir cofre"
-	if m.isNewVault {
-		acao = "Criar cofre"
-	}
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("[Enter] " + acao))
-	if isProPlan() {
-		if !m.isNewVault && mycrypto.HasTelegramUnlockEnvelope() {
-			b.WriteString("\n\n" + lipgloss.NewStyle().Foreground(colorAccent).Render("[Ctrl+T] Entrar pelo Telegram"))
-		}
-	} else {
-		b.WriteString("\n\n" + dimStyle.Render("Sincronizar entre PCs e acessar pelo Telegram"))
-		b.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(colorAccent).Padding(0, 1).Render(botaoAtivarPro))
-	}
-	b.WriteString("\n" + helpStyle.Render("[Esc] Sair"))
-	return boxStyle.Render(b.String())
+	return m.painelAcesso()
 }
 
-const botaoAtivarPro = "Ativar Pro  [Ctrl+P]"
+const botaoAtivarPro = "Conhecer Pro → Ctrl+P"
 
 // Usa as coordenadas da renderização atual, incluindo cabeçalho e avisos.
 // O clique abre a mesma tela do atalho; a compra continua exigindo Enter.
@@ -1719,48 +1698,7 @@ func (m Model) viewConfirmDelete() string {
 }
 
 func (m Model) viewPro() string {
-	var b strings.Builder
-
-	if isProPlan() {
-		cfg, _ := config.LoadConfig()
-		tokenDisplay := "kfr_pro_..."
-		if cfg != nil && len(cfg.KofreToken) > 16 {
-			tokenDisplay = cfg.KofreToken[:16] + "..."
-		}
-
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("╔══════════════════════════════════════════════════════════════╗\n"))
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("║  🌟 Kofre Cloud Pro — Assinatura Ativa                       ║\n"))
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("╚══════════════════════════════════════════════════════════════╝\n\n"))
-
-		b.WriteString("Status:           " + lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("LICENÇA CONFIGURADA") + "\n")
-		b.WriteString(fmt.Sprintf("Licença:          %s\n", tokenDisplay))
-		b.WriteString("Sincronização:    Nuvem S3 Criptografada (Zero-Knowledge E2EE)\n")
-		b.WriteString(fmt.Sprintf("Bot Telegram:     @%s (Alertas e Desbloqueio com Timeout)\n\n", config.GetTelegramBot()))
-		b.WriteString("A disponibilidade da nuvem depende da validade da licença. O cofre local continua disponível.\n\n")
-		b.WriteString(helpStyle.Render("[Enter / Esc] Voltar"))
-	} else {
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("╔══════════════════════════════════════════════════════════════╗\n"))
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("║  🌟 Upgrade para Kofre Cloud Pro                             ║\n"))
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("╚══════════════════════════════════════════════════════════════╝\n\n"))
-
-		b.WriteString("Desbloqueie o poder máximo do seu cofre:\n\n")
-		b.WriteString("  ✓ Sincronização em nuvem Zero-Knowledge (criptografado no cliente)\n")
-		b.WriteString("  ✓ Acesso contínuo e sincronizado entre seus múltiplos computadores\n")
-		b.WriteString(fmt.Sprintf("  ✓ Desbloqueio e recuperação remota via Telegram com Timeout (@%s)\n", config.GetTelegramBot()))
-		b.WriteString("  ✓ Botão de Pânico no Telegram para blindagem ou bloqueio imediato\n")
-		b.WriteString("  ✓ Sincronização do arquivo criptografado; mantenha também backups locais\n\n")
-
-		if m.compraEmAndamento {
-			b.WriteString("Compra aberta no navegador. Após pagar, a licença chega automaticamente.\n")
-			b.WriteString(helpStyle.Render("[Esc] Usar o cofre enquanto aguarda • [r] Reabrir navegador • [x] Interromper espera"))
-		} else {
-			b.WriteString("Pressione Enter para abrir uma compra vinculada a este Kofre.\n")
-			b.WriteString("Mantenha o aplicativo aberto; ele recebe a confirmação e ativa a licença automaticamente.\n\n")
-			b.WriteString(helpStyle.Render("[Enter] Comprar no navegador • [Esc] Voltar"))
-		}
-	}
-
-	return boxStyle.Render(b.String())
+	return m.painelPro()
 }
 
 // ======================== TELA ALTERAR SENHA MESTRE ========================
