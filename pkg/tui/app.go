@@ -1106,7 +1106,7 @@ func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
 	m.formInputs = make([]input, 5)
 
 	m.formInputs[0] = newInput(false)
-	m.formInputs[0].Placeholder = "Ex: AWS Producao, Banco Master, GitHub PAT"
+	m.formInputs[0].Placeholder = "Ex: AWS Producao, Banco, GitHub PAT"
 	m.formInputs[0].Prompt = "Titulo: "
 	m.formInputs[0].SetValue(entry.Title)
 	m.formInputs[0].Focus()
@@ -1739,12 +1739,12 @@ func (m Model) viewPro() string {
 		b.WriteString("  ✓ Botão de Pânico no Telegram para blindagem ou bloqueio imediato\n")
 		b.WriteString("  ✓ Sincronização do arquivo criptografado; mantenha também backups locais\n\n")
 
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")).Render("Conheça o Pro: https://kofre.dev/comprar\nCom sua licença: kofre login <token>.\n\n"))
-
 		if m.compraEmAndamento {
 			b.WriteString("Compra aberta no navegador. Após pagar, a licença chega automaticamente.\n")
 			b.WriteString(helpStyle.Render("[Esc] Usar o cofre enquanto aguarda • [r] Reabrir navegador • [x] Interromper espera"))
 		} else {
+			b.WriteString("Pressione Enter para abrir uma compra vinculada a este Kofre.\n")
+			b.WriteString("Mantenha o aplicativo aberto; ele recebe a confirmação e ativa a licença automaticamente.\n\n")
 			b.WriteString(helpStyle.Render("[Enter] Comprar no navegador • [Esc] Voltar"))
 		}
 	}

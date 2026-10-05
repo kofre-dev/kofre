@@ -86,7 +86,7 @@ func (m Model) receberInicioCompra(msg compraIniciadaMsg) (tea.Model, tea.Cmd) {
 	}
 	m.compraSessao = msg.sessao
 	if err := abrirNavegadorCompra(msg.sessao.URL); err != nil {
-		m.err = errors.New("Não consegui abrir o navegador. Pressione [r] para tentar novamente; a licença também pode ser obtida em kofre.dev/comprar.")
+		m.err = errors.New("Não consegui abrir o navegador. Pressione [r] para reabrir a compra vinculada a este Kofre.")
 	}
 	m.notification = "Compra iniciada. Pague no navegador; o Kofre ativa automaticamente após a confirmação."
 	return m, func() tea.Msg {
