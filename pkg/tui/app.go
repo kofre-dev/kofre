@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"kofre/pkg/compra"
 	"kofre/pkg/config"
@@ -153,6 +154,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		m.lastActivity = time.Now()
+		if m.state == ViewUnlock && msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft && !isProPlan() && m.clicouAtivarPro(msg.X, msg.Y) {
+			m.previousState = m.state
+			m.state = ViewPro
+			m.err = nil
+			return m, nil
+		}
 		if m.showHelp {
 			switch msg.Button {
 			case tea.MouseButtonWheelUp:
@@ -1479,43 +1486,47 @@ func (m Model) renderHeader() string {
 
 func (m Model) viewUnlock() string {
 	var b strings.Builder
-
-	if isProPlan() {
-		b.WriteString(badgeToken.Render("★ KOFRE CLOUD PRO ATIVO (Zero-Knowledge E2EE)"))
-		b.WriteString("\n\n")
-	} else {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("★ Plano FREE (Offline / Local) • Pressione [Ctrl+P] para ativar Plano Cloud Pro"))
-		b.WriteString("\n\n")
-	}
-
 	if m.isNewVault {
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("★ Inicializacao de Novo Cofre"))
-		b.WriteString("\n")
-		b.WriteString("Defina seu PIN ou senha mestre. Essa chave gerara a criptografia AES-256 do cofre.\n\n")
+		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Criar seu cofre"))
+		b.WriteString("\nDefina seu PIN ou senha mestra.\n\n")
 	} else {
-		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Cofre Criptografado Encontrado"))
-		b.WriteString("\n")
-		if mycrypto.HasTelegramUnlockEnvelope() {
-			b.WriteString("Insira sua senha mestre ou pressione ")
-			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true).Render("[Ctrl+T]"))
-			b.WriteString(" para entrar direto pelo Telegram sem senha:\n\n")
-		} else {
-			b.WriteString("Insira sua chave de acesso para carregar os segredos na memoria RAM:\n")
-			b.WriteString(dimStyle.Render("(Ao entrar com a senha uma primeira vez, o desbloqueio rápido por Telegram será ativado)"))
-			b.WriteString("\n\n")
-		}
+		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Abrir seu cofre"))
+		b.WriteString("\nDigite seu PIN ou senha mestra.\n\n")
 	}
-
 	b.WriteString(m.passInput.View())
 	b.WriteString("\n\n")
-
-	if mycrypto.HasTelegramUnlockEnvelope() {
-		b.WriteString(helpStyle.Render("[Enter] Confirmar Senha  •  [Ctrl+T] Desbloquear Direto pelo Telegram  •  [Esc] Sair"))
-	} else {
-		b.WriteString(helpStyle.Render("[Enter] Confirmar Senha  •  [Ctrl+T] Vincular Telegram  •  [Esc] Sair"))
+	acao := "Abrir cofre"
+	if m.isNewVault {
+		acao = "Criar cofre"
 	}
-
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorSuccess).Render("[Enter] " + acao))
+	if isProPlan() {
+		if !m.isNewVault && mycrypto.HasTelegramUnlockEnvelope() {
+			b.WriteString("\n\n" + lipgloss.NewStyle().Foreground(colorAccent).Render("[Ctrl+T] Entrar pelo Telegram"))
+		}
+	} else {
+		b.WriteString("\n\n" + dimStyle.Render("Sincronizar entre PCs e acessar pelo Telegram"))
+		b.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(colorAccent).Padding(0, 1).Render(botaoAtivarPro))
+	}
+	b.WriteString("\n" + helpStyle.Render("[Esc] Sair"))
 	return boxStyle.Render(b.String())
+}
+
+const botaoAtivarPro = "Ativar Pro  [Ctrl+P]"
+
+// Usa as coordenadas da renderização atual, incluindo cabeçalho e avisos.
+// O clique abre a mesma tela do atalho; a compra continua exigindo Enter.
+func (m Model) clicouAtivarPro(x, y int) bool {
+	linhas := strings.Split(ansi.Strip(m.View()), "\n")
+	if y < 0 || y >= len(linhas) {
+		return false
+	}
+	pos := strings.Index(linhas[y], botaoAtivarPro)
+	if pos < 0 {
+		return false
+	}
+	inicio := lipgloss.Width(linhas[y][:pos])
+	return x >= inicio && x < inicio+lipgloss.Width(botaoAtivarPro)
 }
 
 func (m Model) viewTelegramChallenge() string {
