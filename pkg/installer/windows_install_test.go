@@ -10,11 +10,39 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
 func TestRegisterAndUninstallPreservesData(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "Kofre 'teste' [isolado]")
+	for _, curto := range []bool{false, true} {
+		name := "caminho longo"
+		if curto {
+			name = "caminho 8.3"
+		}
+		t.Run(name, func(t *testing.T) { testRegisterAndUninstallPreservesData(t, curto) })
+	}
+}
+
+func testRegisterAndUninstallPreservesData(t *testing.T, curto bool) {
+	base := t.TempDir()
+	if curto {
+		ptr, err := windows.UTF16PtrFromString(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buf := make([]uint16, 32768)
+		n, err := windows.GetShortPathName(ptr, &buf[0], uint32(len(buf)))
+		if err != nil || n >= uint32(len(buf)) {
+			t.Fatalf("caminho curto: %v, tamanho %d", err, n)
+		}
+		short := windows.UTF16ToString(buf[:n])
+		if strings.EqualFold(short, base) {
+			t.Skip("volume sem alias 8.3 para o diretório temporário")
+		}
+		base = short
+	}
+	dir := filepath.Join(base, "Kofre 'teste' [isolado]")
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}

@@ -14,8 +14,11 @@ com depuração habilitada nem código no kernel.
 
 Fonte: https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-openprocess
 
-O teste do desinstalador também falhou no runner, sem mostrar a causa capturada
-pelo script. O teste agora inclui seu log temporário na falha. A remoção continua
-restrita a executável fictício e chaves de registro de teste; cofres e backups
-devem permanecer intactos. A causa depende da saída detalhada, sem suposição de
-que seja falha de permissão, caminho ou PowerShell.
+O log do desinstalador revelou `Destino invalido`. Reprodu??o local com alias
+8.3 confirmou a causa: GetFullPath expande o alias, mas Join-Path o conserva.
+A compara??o passa a normalizar ambos os lados. O teste executa a desinstala??o
+com caminho longo e com alias 8.3, usando apenas execut?vel fict?cio e chaves
+isoladas de registro. A variante 8.3 falhou antes e passou ap?s a corre??o;
+a su?te do instalador passou com race. Cofre, configura??es, backups e o tipo
+EXPAND_SZ do PATH permanecem preservados. Volumes sem nomes curtos dispensam
+somente a variante 8.3; o teste normal continua obrigat?rio.

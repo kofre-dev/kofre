@@ -121,7 +121,7 @@ $target = %s
 $installDir = %s
 $log = Join-Path $env:TEMP 'Kofre-desinstalacao.log'
 try {
-    if ([IO.Path]::GetFullPath($target) -ne (Join-Path $installDir 'Kofre.exe')) { throw 'Destino invalido' }
+    if ([IO.Path]::GetFullPath($target) -ne [IO.Path]::GetFullPath((Join-Path $installDir 'Kofre.exe'))) { throw 'Destino invalido' }
     Wait-Process -Id %d -Timeout 30 -ErrorAction SilentlyContinue
     for ($attempt=0; $attempt -lt 30; $attempt++) {
         try { if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force }; break }
