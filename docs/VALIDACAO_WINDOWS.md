@@ -14,11 +14,11 @@ com depuração habilitada nem código no kernel.
 
 Fonte: https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-openprocess
 
-O log do desinstalador revelou `Destino invalido`. Reprodu??o local com alias
+O log do desinstalador revelou `Destino invalido`. Reprodução local com alias
 8.3 confirmou a causa: GetFullPath expande o alias, mas Join-Path o conserva.
-A compara??o passa a normalizar ambos os lados. O teste executa a desinstala??o
-com caminho longo e com alias 8.3, usando apenas execut?vel fict?cio e chaves
-isoladas de registro. A variante 8.3 falhou antes e passou ap?s a corre??o;
-a su?te do instalador passou com race. Cofre, configura??es, backups e o tipo
+A comparação passa a normalizar ambos os lados. O teste executa a desinstalação
+com caminho longo e com alias 8.3, usando apenas executável fictício e chaves
+isoladas de registro. A variante 8.3 falhou antes e passou após a correção;
+a suíte do instalador passou com race. Cofre, configurações, backups e o tipo
 EXPAND_SZ do PATH permanecem preservados. Volumes sem nomes curtos dispensam
-somente a variante 8.3; o teste normal continua obrigat?rio.
+somente a variante 8.3; o teste normal continua obrigatório.
