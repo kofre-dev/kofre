@@ -21,6 +21,8 @@ var (
 
 // AppConfig armazena as configuracoes do usuario
 type AppConfig struct {
+	ContaID       string `json:"conta_id,omitempty"`
+	PlanoCloud    string `json:"plano_cloud,omitempty"` // Somente apresentação; autorização pertence ao servidor.
 	Tema          string `json:"tema,omitempty"`
 	Mode          string `json:"mode"`          // "local" ou "cloud"
 	VaultPath     string `json:"vault_path"`    // caminho do arquivo local

@@ -51,7 +51,7 @@ func wrapHelp(items []string, width int) string {
 func (m Model) listFooter() string {
 	return m.estilos().helpStyle.Render(wrapHelp([]string{
 		"↑↓ Navegar", "Enter Abrir", "c Copiar", "/ Buscar",
-		"n Novo", "m Mudar Senha", "Ctrl+L Bloquear", "F1 Ajuda", "F2 Temas", "q Sair",
+		"n Novo", "m Mudar Senha", "Ctrl+E Conta/empresas", "Ctrl+L Bloquear", "F1 Ajuda", "F2 Temas", "q Sair",
 	}, max(16, m.larguraAcesso()-4)))
 }
 
@@ -70,6 +70,7 @@ func (m Model) helpLines() []string {
 		"m: alterar senha mestre do cofre (recriptografia)",
 		"Tab/Shift+Tab: mudar categoria",
 		"p: plano e status Pro",
+		"Ctrl+E: conta, empresas, convites e histórico pessoal",
 		"F2: escolher tema de cores",
 		"Ctrl+L: bloquear o cofre",
 		"q ou Ctrl+C: sair do Kofre",

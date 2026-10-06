@@ -7,6 +7,7 @@ import (
 
 var (
 	ErrNotFound = errors.New("arquivo de cofre nao encontrado no storage")
+	ErrConflito = errors.New("conflito de sincronização; confira as cópias local e remota")
 )
 
 // StorageProvider define a interface abstrata para persistencia do cofre criptografado

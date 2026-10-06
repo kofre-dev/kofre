@@ -55,7 +55,7 @@ func TestCompraNaTUIPreservaArquivoLocalEIsolaSandbox(t *testing.T) {
 					}
 					json.NewEncoder(w).Encode(map[string]any{"status": status, "token": token, "sandbox": sandbox})
 				case r.URL.Path == "/v1/auth/verify":
-					w.Write([]byte(`{}`))
+					w.Write([]byte(`{"valid":true,"plan":"pro","user_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
 				case r.URL.Path == "/v1/vault" && r.Method == "PUT":
 					data, _ := io.ReadAll(r.Body)
 					uploads <- data

@@ -1,7 +1,10 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"kofre/internal/arquivo"
 	"os"
@@ -14,6 +17,8 @@ import (
 type LocalStorage struct {
 	filePath string
 }
+
+func (l *LocalStorage) Path() string { return l.filePath }
 
 // NewLocalStorage inicializa o storage local apontando para o caminho indicado
 func NewLocalStorage(path string) (*LocalStorage, error) {
@@ -48,6 +53,33 @@ func (l *LocalStorage) Save(ctx context.Context, data []byte) error {
 		return err
 	}
 	return arquivo.Gravar(l.filePath, data, mycrypto.RestrictFilePermissions)
+}
+
+// Usado em download/restauração explícitos. Preserva o arquivo cifrado anterior
+// antes de instalar outro conteúdo; falha no backup impede a substituição.
+func (l *LocalStorage) SaveComBackup(ctx context.Context, data []byte) (string, error) {
+	backup, err := l.PreservarBackup(ctx, data)
+	if err != nil {
+		return "", err
+	}
+	return backup, l.Save(ctx, data)
+}
+
+// Preserva o conteúdo anterior sem instalar o novo arquivo. Assim o chamador
+// pode registrar a pendência de sincronização antes da substituição local.
+func (l *LocalStorage) PreservarBackup(ctx context.Context, data []byte) (string, error) {
+	atual, err := l.Load(ctx)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return "", err
+	}
+	backup := ""
+	if err == nil && !bytes.Equal(atual, data) {
+		backup = l.filePath + ".backup-" + rand.Text() + ".enc"
+		if err := arquivo.Gravar(backup, atual, mycrypto.RestrictFilePermissions); err != nil {
+			return "", fmt.Errorf("não foi possível preservar o cofre anterior: %w", err)
+		}
+	}
+	return backup, nil
 }
 
 func (l *LocalStorage) Exists(ctx context.Context) (bool, error) {

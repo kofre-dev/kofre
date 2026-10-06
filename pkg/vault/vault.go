@@ -16,6 +16,7 @@ import (
 var (
 	MagicHeader       = []byte("KOFRE001") // 8 bytes identificadores
 	LegacyMagicHeader = []byte("MYCOFRE1") // compatibilidade retroativa
+	ContaMagicHeader  = []byte("KOFRE002") // Impede clientes antigos de descartar a identidade ao regravar.
 	ErrBadMagic       = errors.New("arquivo de cofre invalido: cabecalho magico nao confere")
 	ErrNotFound       = errors.New("credencial nao encontrada")
 )
@@ -41,6 +42,16 @@ func Wrap(v *Vault, salt []byte) (*ManagedVault, error) {
 	mv := NewManaged()
 	mv.salt = append([]byte(nil), salt...)
 	mv.data.SchemaVersion, mv.data.CreatedAt, mv.data.UpdatedAt = v.SchemaVersion, v.CreatedAt, v.UpdatedAt
+	if v.Conta != nil {
+		if !v.Conta.Protected {
+			return nil, errors.New("identidade da conta deve ser protegida")
+		}
+		if err := v.Conta.WithValue(mv.DefinirConta); err != nil {
+			mv.Close()
+			return nil, err
+		}
+		mv.dirty = false
+	}
 	for _, entry := range v.Entries {
 		sealed, err := sealEntry(entry)
 		if err != nil {
@@ -60,6 +71,10 @@ func (mv *ManagedVault) Close() {
 		closeEntry(&mv.data.Entries[i])
 	}
 	mv.data.Entries = nil
+	if mv.data.Conta != nil {
+		mv.data.Conta.Close()
+		mv.data.Conta = nil
+	}
 	mv.closed = true
 }
 
@@ -248,7 +263,11 @@ func (mv *ManagedVault) Pack(key, salt []byte) ([]byte, error) {
 	}
 
 	var buf bytes.Buffer
-	buf.Write(MagicHeader)
+	if mv.data.Conta != nil {
+		buf.Write(ContaMagicHeader)
+	} else {
+		buf.Write(MagicHeader)
+	}
 	buf.Write(salt)
 	buf.Write(encrypted)
 
@@ -264,7 +283,7 @@ func UnpackHeader(raw []byte) (salt, encryptedPayload []byte, err error) {
 	}
 
 	magic := raw[:headerLen]
-	if !bytes.Equal(magic, MagicHeader) && !bytes.Equal(magic, LegacyMagicHeader) {
+	if !bytes.Equal(magic, MagicHeader) && !bytes.Equal(magic, LegacyMagicHeader) && !bytes.Equal(magic, ContaMagicHeader) {
 		return nil, nil, ErrBadMagic
 	}
 
@@ -283,6 +302,9 @@ func DecryptAndLoad(encryptedPayload, key, salt []byte) (*ManagedVault, error) {
 
 	var v Vault
 	defer func() {
+		if v.Conta != nil {
+			v.Conta.Close()
+		}
 		for i := range v.Entries {
 			closeEntry(&v.Entries[i])
 		}

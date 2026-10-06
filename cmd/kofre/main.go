@@ -28,6 +28,8 @@ import (
 	"kofre/pkg/vault"
 )
 
+var vaultDaConta string
+
 func printHelp() {
 	fmt.Printf("Kofre 🔐 — Cofre Criptografado Portátil e Zero-Knowledge v%s (https://kofre.dev)\n\n", updater.CurrentVersion)
 	fmt.Println(`Comandos Principais:
@@ -44,6 +46,9 @@ func printHelp() {
   kofre import <txt>      Importador inteligente de arquivos .txt desformatados
   kofre update            Verifica e aplica atualizações mais recentes do binário
   kofre pro               Abre a compra Pro e ativa a licença automaticamente
+  kofre empresa           Gerencia organizações e compartilhamento cifrado
+  kofre conta             Abre o menu de conta, nuvem e empresas
+  kofre historico         Lista e restaura versões cifradas do cofre pessoal
   kofre version           Exibe a versão do executável Kofre
   kofre backup [pasta]    Gera uma cópia de backup criptografada com timestamp
   kofre restore <arquivo> Restaura o cofre a partir de um backup validado
@@ -99,11 +104,29 @@ func main() {
 
 	if len(os.Args) > 1 {
 		cmd := os.Args[1]
-		if cmd != "update" && cmd != "version" && cmd != "-v" && cmd != "--version" && cmd != "-h" && cmd != "--help" && cmd != "help" {
+		if cmd != "conta" && cmd != "update" && cmd != "version" && cmd != "-v" && cmd != "--version" && cmd != "-h" && cmd != "--help" && cmd != "help" {
 			tryAutoUpdateOnBoot()
 		}
 
 		switch cmd {
+		case "conta":
+			flags := flag.NewFlagSet("conta", flag.ExitOnError)
+			flags.StringVar(&vaultDaConta, "vault", "", "Arquivo do cofre aberto")
+			flags.Parse(os.Args[2:])
+			if err := painelConta(); err != nil {
+				fmt.Fprintln(os.Stderr, "Conta:", err)
+				os.Exit(1)
+			}
+			return
+		case "historico":
+			if err := executarHistorico(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "Histórico:", err)
+				os.Exit(1)
+			}
+			return
+		case "empresa":
+			handleEmpresa(os.Args[2:])
+			return
 		case "-h", "--help", "help":
 			printHelp()
 			return
@@ -317,9 +340,19 @@ func handlePull() {
 		os.Exit(1)
 	}
 
-	if err := localStore.Save(ctx, data); err != nil {
+	backup, err := localStore.SaveComBackup(ctx, data)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Erro ao gravar arquivo baixado: %v\n", err)
 		os.Exit(1)
+	}
+	if cloud, ok := s3Store.(*storage.KofreCloudStorage); ok {
+		if err := cloud.ConfirmarLeitura(data); err != nil {
+			fmt.Fprintln(os.Stderr, "Arquivo baixado; falha ao confirmar revisão:", err)
+			return
+		}
+	}
+	if backup != "" {
+		fmt.Println("Cópia anterior preservada em:", backup)
 	}
 
 	fmt.Printf("✓ Cofre baixado e sincronizado com sucesso em: %s\n", vaultPath)
@@ -343,7 +376,8 @@ func handleLogin(args []string) {
 		endpoint = strings.TrimSpace(args[1])
 	}
 
-	if err := config.ValidateCloudLicense(endpoint, token); err != nil {
+	plano, err := config.ConsultarPlanoCloud(endpoint, token)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "Não foi possível validar a licença:", err)
 		os.Exit(1)
 	}
@@ -351,13 +385,14 @@ func handleLogin(args []string) {
 	cfg.CloudEnabled = true
 	cfg.KofreToken = token
 	cfg.CloudEndpoint = endpoint
+	cfg.ContaID, cfg.PlanoCloud = plano.ContaID, plano.Plano
 
 	if err := config.SaveConfig(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Erro ao salvar configuração: %v\n", err)
 		os.Exit(1)
 	}
 
-	cloudStore := storage.NewKofreCloudStorage(cfg.CloudEndpoint, cfg.KofreToken)
+	cloudStore := storage.NewKofreCloudStorage(cfg.CloudEndpoint, cfg.KofreToken, cfg.ContaID)
 	fmt.Println("✓ Conectado ao Kofre Cloud!")
 	fmt.Printf("  • Endpoint: %s\n", cloudStore.Location())
 	fmt.Println("Execute 'kofre pull' para baixar seu cofre ou 'kofre' para abrir na interface.")
@@ -469,6 +504,12 @@ func handleTelegramReverseLogin(cfg *config.AppConfig, endpoint string) {
 	cfg.CloudEnabled = true
 	cfg.KofreToken = approvedToken
 	cfg.CloudEndpoint = endpoint
+	plano, err := config.ConsultarPlanoCloud(endpoint, approvedToken)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Não foi possível confirmar a conta:", err)
+		return
+	}
+	cfg.ContaID, cfg.PlanoCloud = plano.ContaID, plano.Plano
 
 	if err := config.SaveConfig(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Erro ao salvar configuração: %v\n", err)
@@ -544,9 +585,15 @@ func resolveCloudOrS3Storage(cfg *config.AppConfig) (storage.StorageProvider, er
 	}
 
 	// 1. Modo Kofre Cloud
-	if cfg.Mode == "kofre_cloud" || (cfg.CloudEnabled && cfg.KofreToken != "") {
+	if cfg.Mode == "kofre_cloud" || (cfg.Mode != "custom_s3" && cfg.CloudEnabled && cfg.KofreToken != "") {
 		endpoint := config.GetCloudEndpoint()
-		return storage.NewKofreCloudStorage(endpoint, cfg.KofreToken), nil
+		cloud := storage.NewKofreCloudStorage(endpoint, cfg.KofreToken, cfg.ContaID)
+		if cfg.VaultPath != "" {
+			if err := cloud.DefinirArquivoRevisao(cfg.VaultPath + ".cloud-revision.json"); err != nil {
+				return nil, err
+			}
+		}
+		return cloud, nil
 	}
 
 	// 2. Modo S3 / R2 Próprio
@@ -662,6 +709,9 @@ func resolveVaultPath(flagVal string) string {
 	if flagVal != "" {
 		return flagVal
 	}
+	if vaultDaConta != "" {
+		return vaultDaConta
+	}
 
 	// Modo portátil: se existir vault.enc na pasta do executável ou atual
 	if _, err := os.Stat("vault.enc"); err == nil {
@@ -708,7 +758,8 @@ func handlePro() {
 		fmt.Fprintln(os.Stderr, "Falha ao ler configuração:", err)
 		return
 	}
-	if cfg.CloudEnabled {
+	compraNaConta := cfg.CloudEnabled && cfg.ContaID != "" && strings.HasPrefix(cfg.KofreToken, "kfr_conta_")
+	if cfg.CloudEnabled && !compraNaConta {
 		fmt.Println("Já existe nuvem configurada. Consulte planos e pedidos em https://kofre.dev/comprar; sua conta foi preservada.")
 		return
 	}
@@ -716,7 +767,12 @@ func handlePro() {
 	defer cancel()
 	hostname, _ := os.Hostname()
 	endpoint := config.GetCloudEndpoint()
-	sessao, err := compra.Iniciar(ctx, endpoint, hostname)
+	var sessao *compra.Sessao
+	if compraNaConta {
+		sessao, err = compra.IniciarComConta(ctx, endpoint, hostname, cfg.KofreToken, cfg.ContaID, "pro")
+	} else {
+		sessao, err = compra.Iniciar(ctx, endpoint, hostname)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Não foi possível iniciar a compra:", err)
 		return
@@ -737,7 +793,12 @@ func handlePro() {
 		_ = sessao.Confirmar(ctx)
 		return
 	}
-	if err = config.AtivarLicencaComprada(endpoint, resultado.Token); err != nil {
+	if resultado.ContaID != "" {
+		err = config.ConfirmarProNaConta(resultado.ContaID)
+	} else {
+		err = config.AtivarLicencaComprada(endpoint, resultado.Token)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "Pagamento confirmado, mas não foi possível salvar a licença:", err)
 		fmt.Println("Recupere a licença no pedido em https://kofre.dev/comprar.")
 		return

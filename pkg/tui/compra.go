@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -43,16 +44,17 @@ func (m Model) iniciarCompra() (tea.Model, tea.Cmd) {
 	if m.compraEmAndamento {
 		return m, nil
 	}
-	if _, ok := m.storage.(*storage.LocalStorage); !ok {
-		m.err = errors.New("A ativação automática exige o cofre local. Sua sincronização atual não foi alterada.")
-		return m, nil
-	}
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		m.err = err
 		return m, nil
 	}
-	if cfg.CloudEnabled {
+	compraNaConta := cfg.CloudEnabled && cfg.ContaID != "" && strings.HasPrefix(cfg.KofreToken, "kfr_conta_")
+	if _, local := m.storage.(*storage.LocalStorage); !local && !compraNaConta {
+		m.err = errors.New("A ativação automática exige o cofre local ou uma conta Kofre configurada.")
+		return m, nil
+	}
+	if cfg.CloudEnabled && !compraNaConta {
 		m.err = errors.New("Já existe nuvem configurada. A compra não substituirá sua conta.")
 		return m, nil
 	}
@@ -66,6 +68,10 @@ func (m Model) iniciarCompra() (tea.Model, tea.Cmd) {
 	endpoint := config.GetCloudEndpoint()
 	hostname, _ := os.Hostname()
 	return m, func() tea.Msg {
+		if compraNaConta {
+			sessao, err := compra.IniciarComConta(ctx, endpoint, hostname, cfg.KofreToken, cfg.ContaID, "pro")
+			return compraIniciadaMsg{geracao: geracao, sessao: sessao, ctx: ctx, err: err}
+		}
 		sessao, err := compra.Iniciar(ctx, endpoint, hostname)
 		return compraIniciadaMsg{geracao: geracao, sessao: sessao, ctx: ctx, err: err}
 	}
@@ -122,6 +128,21 @@ func (m Model) receberConclusaoCompra(msg compraConcluidaMsg) (tea.Model, tea.Cm
 		return m, nil
 	}
 	endpoint := m.compraSessao.Endpoint()
+	if msg.resultado.ContaID != "" {
+		if msg.resultado.OrganizacaoID != "" {
+			m.err = errors.New("compra corporativa não altera Pro pessoal")
+			m.encerrarEsperaCompra()
+			return m, nil
+		}
+		if err := config.ConfirmarProNaConta(msg.resultado.ContaID); err != nil {
+			m.err = err
+			m.encerrarEsperaCompra()
+			return m, nil
+		}
+		sessao := m.compraSessao
+		m.encerrarEsperaCompra()
+		return m, tea.Batch(m.notify("Pro ativado na sua conta. Seu cofre e a sincronização foram preservados."), confirmarCompraCmd(sessao))
+	}
 	if err := config.AtivarLicencaComprada(endpoint, msg.resultado.Token); err != nil {
 		m.encerrarEsperaCompra()
 		m.err = errors.New("Pagamento confirmado, mas não consegui salvar a licença: " + err.Error() + ". Ela continua disponível no pedido.")
@@ -134,7 +155,12 @@ func (m Model) receberConclusaoCompra(msg compraConcluidaMsg) (tea.Model, tea.Cm
 		m.err = errors.New("Licença salva; reabra o Kofre para aplicar a sincronização.")
 		return m, nil
 	}
-	remote := storage.NewKofreCloudStorage(endpoint, msg.resultado.Token)
+	cfg, _ := config.LoadConfig()
+	contaID := ""
+	if cfg != nil {
+		contaID = cfg.ContaID
+	}
+	remote := storage.NewKofreCloudStorage(endpoint, msg.resultado.Token, contaID)
 	syncer := storage.NewSyncStorage(local, remote)
 	m.storage = syncer
 	// Primeira sincronização conserva exatamente o arquivo cifrado local existente.

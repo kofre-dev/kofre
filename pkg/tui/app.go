@@ -147,13 +147,18 @@ func NewModel(store storage.StorageProvider) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, securityTick())
+	return tea.Batch(textinput.Blink, securityTick(), atualizarPlanoCmd)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case contaRetornouMsg:
+		return m.retomarConta(msg)
+	case planoAtualizadoMsg:
+		// A cópia local continua utilizável se a nuvem estiver offline.
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -211,6 +216,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		m.lastActivity = time.Now()
+		if msg.Type == tea.KeyCtrlE && m.vault != nil && !m.mostrarTemas {
+			return m.abrirConta()
+		}
 		if m.mostrarTemas && msg.Type != tea.KeyCtrlC && msg.Type != tea.KeyCtrlL {
 			return m.atualizarTemas(msg)
 		}
@@ -1391,7 +1399,7 @@ func isProPlan() bool {
 	if err != nil || cfg == nil {
 		return false
 	}
-	return cfg.CloudEnabled && cfg.KofreToken != ""
+	return cfg.CloudEnabled && cfg.KofreToken != "" && (cfg.PlanoCloud == "pro" || cfg.PlanoCloud == "" && !strings.HasPrefix(cfg.KofreToken, "kfr_conta_"))
 }
 
 func (m Model) updatePro(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

@@ -39,9 +39,11 @@ func RunInteractiveConfig() error {
 		fmt.Print("\nDigite seu Token do Kofre Cloud (ex: kfr_live_...): ")
 		token, _ := reader.ReadString('\n')
 		cfg.KofreToken = strings.TrimSpace(token)
-		if err := ValidateCloudLicense(GetCloudEndpoint(), cfg.KofreToken); err != nil {
+		plano, err := ConsultarPlanoCloud(GetCloudEndpoint(), cfg.KofreToken)
+		if err != nil {
 			return err
 		}
+		cfg.ContaID, cfg.PlanoCloud = plano.ContaID, plano.Plano
 		fmt.Println("✓ Kofre Cloud configurado!")
 
 	case "3":

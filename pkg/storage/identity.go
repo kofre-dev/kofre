@@ -11,6 +11,9 @@ func syncDestination(provider StorageProvider) string {
 	switch p := provider.(type) {
 	case *KofreCloudStorage:
 		discriminator = p.endpoint + "\x00" + p.token
+		if p.contaID != "" {
+			discriminator = p.endpoint + "\x00conta:" + p.contaID
+		}
 	case *S3Storage:
 		discriminator = p.config.Endpoint + "\x00" + p.config.Bucket + "\x00" + p.config.Key + "\x00" + p.config.AccessKeyID
 	}

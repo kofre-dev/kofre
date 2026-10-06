@@ -59,6 +59,7 @@ type Vault struct {
 	CreatedAt     time.Time     `json:"created_at"`
 	UpdatedAt     time.Time     `json:"updated_at"`
 	Entries       []SecretEntry `json:"entries"`
+	Conta         *Field        `json:"conta,omitempty"`
 }
 
 // NewVault cria uma nova instancia vazia do cofre

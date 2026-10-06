@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,9 @@ func NewSyncStorage(local, remote StorageProvider) *SyncStorage {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &SyncStorage{local: local, remote: remote, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), changed: make(chan struct{}, 1), done: make(chan struct{})}
 	if l, ok := local.(*LocalStorage); ok && remote != nil {
+		if cloud, ok := remote.(*KofreCloudStorage); ok {
+			s.initErr = cloud.DefinirArquivoRevisao(l.filePath + ".cloud-revision.json")
+		}
 		s.marker = l.filePath + ".sync-pending.json"
 		data, err := os.ReadFile(s.marker)
 		if err == nil {
@@ -62,11 +66,29 @@ func (s *SyncStorage) signal(ch chan struct{}) {
 	}
 }
 func (s *SyncStorage) Load(ctx context.Context) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.initErr != nil {
 		return nil, s.initErr
 	}
 	data, err := s.local.Load(ctx)
 	if err == nil {
+		cloud, gerenciada := s.remote.(*KofreCloudStorage)
+		local, arquivoLocal := s.local.(*LocalStorage)
+		if gerenciada && arquivoLocal && s.pending == nil && cloud.coincideComBase(data) {
+			timeout, cancel := context.WithTimeout(ctx, 3*time.Second)
+			remoto, falha := cloud.Load(timeout)
+			cancel()
+			if falha == nil && !bytes.Equal(data, remoto) {
+				if _, falha = local.SaveComBackup(ctx, remoto); falha == nil {
+					data = remoto
+					falha = cloud.ConfirmarLeitura(remoto)
+				}
+			} else if falha == nil {
+				falha = cloud.ConfirmarLeitura(remoto)
+			}
+			s.lastErr = falha // Offline conserva a cópia local e informa a pendência.
+		}
 		return data, nil
 	}
 	if !errors.Is(err, ErrNotFound) {
@@ -81,6 +103,11 @@ func (s *SyncStorage) Load(ctx context.Context) ([]byte, error) {
 	}
 	if err = s.local.Save(ctx, data); err != nil {
 		return nil, err
+	}
+	if cloud, ok := s.remote.(*KofreCloudStorage); ok {
+		if err = cloud.ConfirmarLeitura(data); err != nil {
+			return nil, err
+		}
 	}
 	return data, nil
 }
@@ -111,6 +138,7 @@ func (s *SyncStorage) Save(ctx context.Context, data []byte) error {
 }
 func (s *SyncStorage) backgroundSyncWorker() {
 	defer close(s.done)
+	atraso := time.Second
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -149,11 +177,15 @@ func (s *SyncStorage) backgroundSyncWorker() {
 			more := s.pending != nil
 			s.mu.Unlock()
 			s.signal(s.changed)
+			if errors.Is(err, ErrConflito) {
+				break
+			}
 			if !more {
 				break
 			}
 			if err != nil {
-				timer := time.NewTimer(time.Second)
+				timer := time.NewTimer(atraso)
+				atraso = min(atraso*2, time.Minute)
 				select {
 				case <-s.ctx.Done():
 					timer.Stop()
@@ -162,6 +194,8 @@ func (s *SyncStorage) backgroundSyncWorker() {
 					timer.Stop()
 				case <-timer.C:
 				}
+			} else {
+				atraso = time.Second
 			}
 		}
 	}
@@ -183,6 +217,9 @@ func (s *SyncStorage) Flush(timeout time.Duration) error {
 		if !busy {
 			return nil
 		}
+		if errors.Is(err, ErrConflito) {
+			return err
+		}
 		select {
 		case <-s.changed:
 		case <-ticker.C:
@@ -197,6 +234,9 @@ func (s *SyncStorage) Flush(timeout time.Duration) error {
 	}
 }
 func (s *SyncStorage) Close() { s.cancel(); <-s.done }
+
+// Permite reabrir a sincronização após trocar a configuração de conta.
+func (s *SyncStorage) Providers() (StorageProvider, StorageProvider) { return s.local, s.remote }
 func (s *SyncStorage) Exists(ctx context.Context) (bool, error) {
 	if s.initErr != nil {
 		return false, s.initErr

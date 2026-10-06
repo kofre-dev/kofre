@@ -95,6 +95,9 @@ func TestChangeMasterPasswordFullCycle(t *testing.T) {
 	}
 	defer m.Close()
 
+	if err := m.vault.DefinirConta([]byte(`{"token":"conta-ficticia-troca"}`)); err != nil {
+		t.Fatal(err)
+	}
 	// 3. Pressiona 'm' para abrir tela de mudar senha
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	m = next.(Model)
@@ -143,6 +146,9 @@ func TestChangeMasterPasswordFullCycle(t *testing.T) {
 		t.Fatalf("falha ao reabrir cofre com nova senha: %v", m.err)
 	}
 
+	if !m.vault.TemConta() {
+		t.Fatal("troca de senha perdeu a identidade da conta")
+	}
 	// 9. Confirma que os dados permaneceram intactos
 	if m.vault.Count() != 1 {
 		t.Fatalf("esperava 1 entrada no cofre, obteve %d", m.vault.Count())

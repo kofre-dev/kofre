@@ -246,6 +246,7 @@ func marshalVault(v *Vault) (result []byte, err error) {
 	}()
 	meta := *v
 	meta.Entries = nil
+	meta.Conta = nil
 	head, err := json.Marshal(struct {
 		*Vault
 		Entries []SecretEntry `json:"entries,omitempty"`
@@ -254,6 +255,13 @@ func marshalVault(v *Vault) (result []byte, err error) {
 		return nil, err
 	}
 	appendSafe(head[:len(head)-1])
+	if v.Conta != nil {
+		appendSafe([]byte(`,"conta":{"name":"Identidade da conta","protected":true,"value":`))
+		if err = v.Conta.sealed.WithBytes(func(raw []byte) error { appendSafe(raw); return nil }); err != nil {
+			return result, err
+		}
+		appendSafe([]byte(`}`))
+	}
 	appendSafe([]byte(`,"entries":[`))
 	for i, entry := range v.Entries {
 		if i > 0 {

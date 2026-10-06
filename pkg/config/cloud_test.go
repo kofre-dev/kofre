@@ -26,6 +26,9 @@ func TestAtivacaoPreservaCofreEContaExistente(t *testing.T) {
 			t.Error("rota inesperada")
 		}
 		w.WriteHeader(int(status.Load()))
+		if status.Load() == 200 {
+			_, _ = w.Write([]byte(`{"valid":true,"plan":"pro","user_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
+		}
 	}))
 	defer gateway.Close()
 	cfg := DefaultConfig()

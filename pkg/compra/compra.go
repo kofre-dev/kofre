@@ -31,13 +31,18 @@ func (e *falhaHTTP) Error() string {
 }
 
 type Resultado struct {
-	Status  string `json:"status"`
-	Token   string `json:"token"`
-	OrderID string `json:"order_id"`
-	Sandbox bool   `json:"sandbox"`
+	ContaID       string `json:"conta_id,omitempty"`
+	OrganizacaoID string `json:"organizacao_id,omitempty"`
+	Status        string `json:"status"`
+	Token         string `json:"token"`
+	OrderID       string `json:"order_id"`
+	Sandbox       bool   `json:"sandbox"`
 }
 
 type Sessao struct {
+	contaID     string
+	contaToken  string
+	produto     string
 	ID          string
 	URL         string
 	ExpiresAt   time.Time
@@ -71,6 +76,25 @@ func endpointSeguro(endpoint string) bool {
 }
 
 func Iniciar(ctx context.Context, endpoint, computador string) (*Sessao, error) {
+	return iniciarCompra(ctx, endpoint, computador, "", "", "")
+}
+
+// Vincula pagamento à identidade existente; o recibo não recebe sua credencial.
+func IniciarComConta(ctx context.Context, endpoint, computador, token, contaID, produto string) (*Sessao, error) {
+	if !idValido.MatchString(contaID) || !strings.HasPrefix(token, "kfr_conta_") || len(token) > 128 || (produto != "pro" && produto != "corporativo") {
+		return nil, errors.New("conta ou produto inválido para compra")
+	}
+	return iniciarCompra(ctx, endpoint, computador, token, contaID, produto)
+}
+
+func RenovarEmpresa(ctx context.Context, endpoint, computador, token, contaID, org string) (*Sessao, error) {
+	if !idValido.MatchString(org) || !idValido.MatchString(contaID) || !strings.HasPrefix(token, "kfr_conta_") {
+		return nil, errors.New("conta ou organização inválida")
+	}
+	return iniciarCompra(ctx, endpoint, computador, token, contaID, "corporativo", org)
+}
+
+func iniciarCompra(ctx context.Context, endpoint, computador, token, contaID, produto string, organizacao ...string) (*Sessao, error) {
 	if !endpointSeguro(endpoint) {
 		return nil, errors.New("a compra exige um endpoint HTTPS confiável")
 	}
@@ -88,13 +112,19 @@ func Iniciar(ctx context.Context, endpoint, computador string) (*Sessao, error) 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Minute)
 	s := &Sessao{endpoint: strings.TrimRight(endpoint, "/"), verificador: verificador, callback: "http://" + listener.Addr().String() + "/retorno/" + state, wake: make(chan struct{}, 1), ctx: ctx, cancel: cancel, client: &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	s.contaID, s.contaToken, s.produto = contaID, token, produto
 	var reply struct {
 		SessionID    string    `json:"session_id"`
 		BrowserURL   string    `json:"browser_url"`
 		CallbackCode string    `json:"callback_code"`
 		ExpiresAt    time.Time `json:"expires_at"`
 	}
-	err = s.request(ctx, "POST", "/v1/billing/activations", map[string]string{"verifier_hash": hash(verificador), "callback_url": s.callback, "device_name": computador}, &reply)
+	entrada := map[string]string{"verifier_hash": hash(verificador), "callback_url": s.callback, "device_name": computador, "produto": produto}
+	if len(organizacao) > 0 {
+		entrada["organizacao_id"] = organizacao[0]
+	}
+	err = s.request(ctx, "POST", "/v1/billing/activations", entrada, &reply)
+	s.contaToken = ""
 	u, parseErr := url.Parse(reply.BrowserURL)
 	if err == nil && (parseErr != nil || u.Scheme != "https" || u.Host != "kofre.dev" || u.User != nil || u.Path != "/comprar" || u.Query().Get("ativacao") != reply.SessionID || !idValido.MatchString(reply.SessionID) || !segredoValido.MatchString(reply.CallbackCode) || !segredoValido.MatchString(urlValuesFragment(u).Get("vinculo")) || !reply.ExpiresAt.After(time.Now()) || reply.ExpiresAt.After(time.Now().Add(91*time.Minute))) {
 		err = errors.New("resposta de compra inválida")
@@ -136,6 +166,8 @@ func (s *Sessao) request(ctx context.Context, method, path string, body, result 
 	}
 	if s.ID != "" {
 		req.Header.Set("Authorization", "Bearer "+s.verificador)
+	} else if s.contaToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.contaToken)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -188,8 +220,21 @@ func (s *Sessao) receberRetorno(w http.ResponseWriter, r *http.Request) {
 func (s *Sessao) Consultar(ctx context.Context) (Resultado, error) {
 	var result Resultado
 	err := s.request(ctx, "GET", "/v1/billing/activations/"+s.ID, nil, &result)
-	if err == nil && result.Status == "active" && (result.Sandbox || !strings.HasPrefix(result.Token, "kfr_pro_") || len(result.Token) > 128) {
-		return Resultado{}, errors.New("licença de compra inválida")
+	if err == nil && result.Status == "active" {
+		valido := !result.Sandbox
+		if s.contaID != "" {
+			valido = valido && result.ContaID == s.contaID && result.Token == ""
+			if s.produto == "corporativo" {
+				valido = valido && idValido.MatchString(result.OrganizacaoID)
+			} else {
+				valido = valido && result.OrganizacaoID == ""
+			}
+		} else {
+			valido = valido && strings.HasPrefix(result.Token, "kfr_pro_") && len(result.Token) <= 128 && result.ContaID == "" && result.OrganizacaoID == ""
+		}
+		if !valido {
+			return Resultado{}, errors.New("ativação de compra inválida")
+		}
 	}
 	return result, err
 }
