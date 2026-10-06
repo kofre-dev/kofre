@@ -24,6 +24,7 @@ var (
 // que nega explicitamente PROCESS_VM_READ, PROCESS_VM_WRITE, PROCESS_VM_OPERATION,
 // PROCESS_CREATE_THREAD, PROCESS_DUP_HANDLE e PROCESS_QUERY_INFORMATION (0x410)
 // para outros processos locais (incluindo dumpers de memoria e anexadores de console).
+// Não impede acesso com SeDebugPrivilege habilitado nem acesso pelo kernel.
 func ProtectProcess() {
 	// 1. Desativa dialogos de erro e crash dumps automaticos
 	const semFlags = 0x0001 | 0x0002

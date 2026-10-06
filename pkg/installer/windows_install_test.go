@@ -57,9 +57,11 @@ func TestRegisterAndUninstallPreservesData(t *testing.T) {
 		t.Fatal("desinstalador nao deve remover pastas recursivamente")
 	}
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPowerShell(script))
-	cmd.Env = append(os.Environ(), "TEMP="+t.TempDir())
+	logDir := t.TempDir()
+	cmd.Env = append(os.Environ(), "TEMP="+logDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("desinstalacao: %v %s", err, output)
+		log, logErr := os.ReadFile(filepath.Join(logDir, "Kofre-desinstalacao.log"))
+		t.Fatalf("desinstalacao: %v %s; log: %s (leitura: %v)", err, output, log, logErr)
 	}
 	if _, err := os.Stat(binaryPath); !os.IsNotExist(err) {
 		t.Fatal("executavel permaneceu")
