@@ -16,7 +16,7 @@ import (
 )
 
 // CurrentVersion define a versão atual compilada do binário do Kofre
-const CurrentVersion = "1.0.18"
+const CurrentVersion = "1.0.19"
 
 // PlatformRelease armazena os metadados do binário para um sistema operacional e arquitetura
 type PlatformRelease struct {

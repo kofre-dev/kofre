@@ -16,11 +16,11 @@ import (
 
 func painelConta() error {
 	for {
-		i, err := tui.EscolherOpcao("Kofre · Conta e empresas", []string{"Criar conta gratuita", "Conectar conta / administrar empresas", "Restaurar identidade em outro PC", "Recuperar acesso à conta", "Conhecer Pro pessoal", "Histórico do cofre pessoal", "Voltar ao cofre"})
+		i, err := tui.EscolherOpcao("Kofre · Conta e empresas", []string{"Criar conta gratuita por e-mail", "Minha conta / administrar empresas", "Entrar por e-mail neste PC", "Recuperar acesso por e-mail", "Conhecer Pro pessoal", "Histórico do cofre pessoal", "Sessões e dispositivos", "Atualizar backup da conta na nuvem", "Encerrar acesso deste PC", "Restaurar backup manual", "Voltar ao cofre"})
 		if err != nil {
 			return err
 		}
-		if i < 0 || i == 6 {
+		if i < 0 || i == 10 {
 			return nil
 		}
 		switch i {
@@ -29,13 +29,21 @@ func painelConta() error {
 		case 1:
 			err = executarEmpresa([]string{"painel"})
 		case 2:
-			err = executarEmpresa([]string{"restaurar", perguntarEmpresa("Arquivo de identidade .enc")})
+			err = executarEmpresa([]string{"entrar"})
 		case 3:
-			err = executarEmpresa([]string{"recuperar"})
+			err = executarEmpresa([]string{"recuperar-email"})
 		case 4:
 			handlePro()
 		case 5:
 			err = executarHistorico([]string{"painel"})
+		case 6:
+			err = executarEmpresa([]string{"sessoes"})
+		case 7:
+			err = executarEmpresa([]string{"backup-conta"})
+		case 8:
+			err = executarEmpresa([]string{"sair-conta"})
+		case 9:
+			err = executarEmpresa([]string{"restaurar", perguntarEmpresa("Arquivo de identidade .enc")})
 		}
 		if err != nil {
 			fmt.Println("Não foi possível concluir:", err)

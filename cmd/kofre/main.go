@@ -98,7 +98,10 @@ func main() {
 	if err := installer.RefreshRegistration(updater.CurrentVersion); err != nil {
 		fmt.Fprintln(os.Stderr, "Aviso ao registrar o aplicativo no Windows:", err)
 	}
-	mycrypto.ProtectProcess()
+	if err := mycrypto.ProtectProcess(); err != nil {
+		fmt.Fprintln(os.Stderr, "Não foi possível iniciar com a proteção de memória:", err)
+		os.Exit(1)
+	}
 	updater.CleanupOldBinaries()
 	mycrypto.PurgeLegacyDeviceKey()
 
@@ -113,6 +116,19 @@ func main() {
 			flags := flag.NewFlagSet("conta", flag.ExitOnError)
 			flags.StringVar(&vaultDaConta, "vault", "", "Arquivo do cofre aberto")
 			flags.Parse(os.Args[2:])
+			if args := flags.Args(); len(args) > 0 {
+				acoes := map[string]string{"criar": "criar-conta", "entrar": "entrar", "recuperar": "recuperar-email", "sessoes": "sessoes", "sair": "sair-conta", "backup": "backup-conta"}
+				acao, ok := acoes[args[0]]
+				if !ok || len(args) != 1 {
+					fmt.Fprintln(os.Stderr, "Uso: kofre conta [criar|entrar|recuperar|sessoes|sair|backup]")
+					os.Exit(1)
+				}
+				if err := executarEmpresa([]string{acao}); err != nil {
+					fmt.Fprintln(os.Stderr, "Conta:", err)
+					os.Exit(1)
+				}
+				return
+			}
 			if err := painelConta(); err != nil {
 				fmt.Fprintln(os.Stderr, "Conta:", err)
 				os.Exit(1)

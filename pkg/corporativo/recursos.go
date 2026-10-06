@@ -3,6 +3,7 @@ package corporativo
 import (
 	"context"
 	"fmt"
+	mycrypto "kofre/pkg/crypto"
 )
 
 type Pessoa struct {
@@ -82,11 +83,27 @@ func (c *Client) Ler(ctx context.Context, org, id string) ([]byte, *ItemRecebido
 	if err = c.confiar(item.Copia.Autor, Pessoa{Nome: item.Copia.Autor, ChavePublica: item.Copia.PublicaAutor, ChaveAssinatura: item.Copia.AssinaturaPublica}, c.ConfirmarAutor); err != nil {
 		return nil, nil, err
 	}
-	data, err := Abrir(c.Identidade.Privada, org, id, c.Identidade.ID, item.Versao, item.Copia.Cifra)
+	var data []byte
+	err = c.Identidade.ComPrivada(func(priv []byte) error {
+		var e error
+		data, e = Abrir(priv, org, id, c.Identidade.ID, item.Versao, item.Copia.Cifra)
+		return e
+	})
 	return data, &item, err
 }
 
 func (c *Client) Gravar(ctx context.Context, org, id, workspace string, versao uint64, a Acesso, data []byte, confirmar func(string, Pessoa, string) bool) error {
+	protegido, err := mycrypto.SealMemory(data)
+	if err != nil {
+		return err
+	}
+	defer protegido.Close()
+	return c.GravarProtegido(ctx, org, id, workspace, versao, a, protegido, confirmar)
+}
+
+// GravarProtegido mantém o conteúdo selado durante rede e confirmação de chaves.
+// O chamador deve apagar a cópia de origem antes de chamar esta função.
+func (c *Client) GravarProtegido(ctx context.Context, org, id, workspace string, versao uint64, a Acesso, data *mycrypto.SealedBuffer, confirmar func(string, Pessoa, string) bool) error {
 	if !IDValido(org) || !IDValido(id) || !IDValido(workspace) || versao == 0 {
 		return fmt.Errorf("recurso ou versão inválida")
 	}
@@ -125,7 +142,12 @@ func (c *Client) Gravar(ctx context.Context, org, id, workspace string, versao u
 		if err = c.confiar(idPessoa, pessoa, confirmar); err != nil {
 			return err
 		}
-		cifra, err := Cifrar(pessoa.ChavePublica, org, id, idPessoa, versao, data)
+		var cifra []byte
+		err := data.WithBytes(func(aberto []byte) error {
+			var e error
+			cifra, e = Cifrar(pessoa.ChavePublica, org, id, idPessoa, versao, aberto)
+			return e
+		})
 		if err != nil {
 			return err
 		}

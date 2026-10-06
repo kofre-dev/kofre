@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"kofre/pkg/corporativo"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -77,7 +78,7 @@ func AtivarLicencaComprada(endpoint, token string) error {
 	if err != nil {
 		return err
 	}
-	mesmaConta := strings.HasPrefix(cfg.KofreToken, "kfr_conta_") && strings.HasPrefix(token, "kfr_conta_") && cfg.ContaID != "" && cfg.ContaID == plano.ContaID && strings.TrimRight(cfg.CloudEndpoint, "/") == strings.TrimRight(endpoint, "/")
+	mesmaConta := corporativo.CredencialContaValida(cfg.KofreToken) && corporativo.CredencialContaValida(token) && cfg.ContaID != "" && cfg.ContaID == plano.ContaID && strings.TrimRight(cfg.CloudEndpoint, "/") == strings.TrimRight(endpoint, "/")
 	if cfg.CloudEnabled && cfg.KofreToken != token && !mesmaConta {
 		return errors.New("já existe outra conta de nuvem configurada; a compra não alterou sua conta")
 	}
@@ -126,7 +127,7 @@ func ConfirmarProNaConta(contaID string) error {
 	if err != nil {
 		return err
 	}
-	if !cfg.CloudEnabled || cfg.ContaID != contaID || !strings.HasPrefix(cfg.KofreToken, "kfr_conta_") {
+	if !cfg.CloudEnabled || cfg.ContaID != contaID || !corporativo.CredencialContaValida(cfg.KofreToken) {
 		return errors.New("a compra pertence a outra conta; configuração preservada")
 	}
 	p, err := ConsultarPlanoCloud(GetCloudEndpoint(), cfg.KofreToken)

@@ -11,7 +11,9 @@ import (
 )
 
 func TestProtectProcessBlocksVMRead(t *testing.T) {
-	ProtectProcess()
+	if err := ProtectProcess(); err != nil {
+		t.Fatal(err)
+	}
 	// DACL não contém SeDebugPrivilege. Execute a verificação com uma cópia
 	// do token da thread sem privilégios elevados, sem alterar o processo/runner.
 	runtime.LockOSThread()

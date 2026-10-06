@@ -40,7 +40,7 @@ A decifração acontece **exclusivamente na memória RAM do seu computador local
 2. **Entrega Criptografada:** A API no Railway busca o arquivo no S3 e o devolve para o `kofre.exe` **ainda 100% criptografado** via canal seguro HTTPS (TLS).
 3. **Desbloqueio Local:** O seu terminal pede a sua **Master Password**.
 4. **Decifração em RAM:** O seu processador executa o Argon2id, deriva a chave e abre o cofre na memória RAM volátil.
-5. **Limpeza da RAM:** Ao fechar a tela ou terminar o comando (`kofre exec`), o Kofre sobrescreve todos os bytes da chave e das senhas na RAM com zeros (`mycrypto.ZeroBytes`).
+5. **Limpeza da RAM:** Ao bloquear ou encerrar, o Kofre sobrescreve os buffers sob seu controle e fecha as chaves/campos selados. Não consegue garantir a limpeza de cópias produzidas pelo sistema operacional, runtime, terminal, clipboard ou processo filho. Uma máquina comprometida continua sendo um risco.
 
 ---
 
@@ -50,7 +50,7 @@ O arquivo gravado no disco e no S3 possui a seguinte estrutura binária:
 
 | Offset | Tamanho | Campo | Descrição |
 |---|---|---|---|
-| `0..7` | 8 bytes | **Magic** | `KOFRE001`, com leitura compatível de `MYCOFRE1` |
+| `0..7` | 8 bytes | **Magic** | `KOFRE001` ou `KOFRE002` com identidade; leitura compatível de `MYCOFRE1` |
 | `8..23` | 16 bytes | **Salt Argon2id** | Salt aleatório por cofre; renovado na troca da senha mestre |
 | `24..35` | 12 bytes | **Nonce / IV** | Nonce aleatório por gravação AES-GCM |
 | `36..N-17` | Variável | **Ciphertext** | Payload JSON cifrado; não usa Gzip |

@@ -9,8 +9,9 @@ import (
 )
 
 // ProtectProcess blinda o processo contra ptrace (debuggers) e geração de coredump
-func ProtectProcess() {
+func ProtectProcess() error {
 	protectProcessOS()
+	return nil // Os limites das outras plataformas são documentados separadamente.
 }
 
 // LockMemory trava o buffer na RAM física usando mlock(2), impedindo swap para o disco

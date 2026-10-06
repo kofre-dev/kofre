@@ -3,6 +3,7 @@
 package crypto
 
 import (
+	"fmt"
 	"runtime"
 	"unsafe"
 
@@ -25,7 +26,7 @@ var (
 // PROCESS_CREATE_THREAD, PROCESS_DUP_HANDLE e PROCESS_QUERY_INFORMATION (0x410)
 // para outros processos locais (incluindo dumpers de memoria e anexadores de console).
 // Não impede acesso com SeDebugPrivilege habilitado nem acesso pelo kernel.
-func ProtectProcess() {
+func ProtectProcess() error {
 	// 1. Desativa dialogos de erro e crash dumps automaticos
 	const semFlags = 0x0001 | 0x0002
 	procSetErrorMode := modkernel32.NewProc("SetErrorMode")
@@ -49,27 +50,32 @@ func ProtectProcess() {
 	//   Total permitido: 0x101001
 	sddlStr, err := windows.UTF16PtrFromString("D:P(D;;0x47A;;;WD)(A;;0x101001;;;WD)")
 	if err != nil {
-		return
+		return err
 	}
 
 	var pSd uintptr
 	var sdSize uint32
-	r1, _, _ := procConvertStringSDToSD.Call(
+	r1, _, erroSD := procConvertStringSDToSD.Call(
 		uintptr(unsafe.Pointer(sddlStr)),
 		1, // SDDL_REVISION_1
 		uintptr(unsafe.Pointer(&pSd)),
 		uintptr(unsafe.Pointer(&sdSize)),
 	)
 	if r1 != 0 && pSd != 0 {
+		defer procLocalFree.Call(pSd)
 		const daclSecInfo = 4 // DACL_SECURITY_INFORMATION
 		currProc := windows.CurrentProcess()
-		_, _, _ = procSetKernelObjectSec.Call(
+		resultado, _, erroDACL := procSetKernelObjectSec.Call(
 			uintptr(currProc),
 			uintptr(daclSecInfo),
 			pSd,
 		)
-		_, _, _ = procLocalFree.Call(pSd)
+		if resultado == 0 {
+			return fmt.Errorf("não foi possível restringir a leitura do processo: %v", erroDACL)
+		}
+		return nil
 	}
+	return fmt.Errorf("não foi possível criar a proteção do processo: %v", erroSD)
 }
 
 // LockMemory trava o buffer na RAM física usando VirtualLock, impedindo o Windows de enviá-lo para o pagefile.sys

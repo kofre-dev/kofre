@@ -68,6 +68,10 @@ func abrirIdentidadeConta(path string, password []byte) (*corporativo.Identidade
 	if i.Pins == nil {
 		i.Pins = map[string]string{}
 	}
+	if err = i.ProtegerPrivada(); err != nil {
+		i.Fechar()
+		return nil, err
+	}
 	return &i, nil
 }
 
@@ -113,7 +117,7 @@ func (s *sessaoConta) salvar(i *corporativo.Identidade) error {
 	if !bytes.Equal(atual, s.base) {
 		return errors.New("cofre alterado por outro processo; reabra a conta antes de continuar")
 	}
-	data, err := json.Marshal(i)
+	data, err := i.Serializar()
 	if err != nil {
 		return err
 	}

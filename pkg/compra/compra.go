@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"kofre/pkg/corporativo"
 	"net"
 	"net/http"
 	"net/url"
@@ -81,14 +82,14 @@ func Iniciar(ctx context.Context, endpoint, computador string) (*Sessao, error) 
 
 // Vincula pagamento à identidade existente; o recibo não recebe sua credencial.
 func IniciarComConta(ctx context.Context, endpoint, computador, token, contaID, produto string) (*Sessao, error) {
-	if !idValido.MatchString(contaID) || !strings.HasPrefix(token, "kfr_conta_") || len(token) > 128 || (produto != "pro" && produto != "corporativo") {
+	if !idValido.MatchString(contaID) || !corporativo.CredencialContaValida(token) || (produto != "pro" && produto != "corporativo") {
 		return nil, errors.New("conta ou produto inválido para compra")
 	}
 	return iniciarCompra(ctx, endpoint, computador, token, contaID, produto)
 }
 
 func RenovarEmpresa(ctx context.Context, endpoint, computador, token, contaID, org string) (*Sessao, error) {
-	if !idValido.MatchString(org) || !idValido.MatchString(contaID) || !strings.HasPrefix(token, "kfr_conta_") {
+	if !idValido.MatchString(org) || !idValido.MatchString(contaID) || !corporativo.CredencialContaValida(token) {
 		return nil, errors.New("conta ou organização inválida")
 	}
 	return iniciarCompra(ctx, endpoint, computador, token, contaID, "corporativo", org)

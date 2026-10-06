@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"os"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"kofre/pkg/compra"
 	"kofre/pkg/config"
+	"kofre/pkg/corporativo"
 	"kofre/pkg/storage"
 )
 
@@ -49,7 +49,7 @@ func (m Model) iniciarCompra() (tea.Model, tea.Cmd) {
 		m.err = err
 		return m, nil
 	}
-	compraNaConta := cfg.CloudEnabled && cfg.ContaID != "" && strings.HasPrefix(cfg.KofreToken, "kfr_conta_")
+	compraNaConta := cfg.CloudEnabled && cfg.ContaID != "" && corporativo.CredencialContaValida(cfg.KofreToken)
 	if _, local := m.storage.(*storage.LocalStorage); !local && !compraNaConta {
 		m.err = errors.New("A ativação automática exige o cofre local ou uma conta Kofre configurada.")
 		return m, nil

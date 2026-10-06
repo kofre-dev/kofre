@@ -6,19 +6,29 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 )
 
 func (i *Identidade) chaveAssinatura() (ed25519.PrivateKey, error) {
-	if len(i.Privada) != 32 {
-		return nil, fmt.Errorf("identidade inválida")
-	}
-	seed, err := hkdf.Key(sha256.New, i.Privada, nil, "kofre:corporativo:ed25519:v1", 32)
+	var seed []byte
+	err := i.ComPrivada(func(priv []byte) error {
+		var e error
+		seed, e = hkdf.Key(sha256.New, priv, nil, "kofre:corporativo:ed25519:v1", 32)
+		return e
+	})
 	if err != nil {
 		return nil, err
 	}
 	defer clear(seed)
 	return ed25519.NewKeyFromSeed(seed), nil
+}
+
+func (i *Identidade) AssinarMensagem(mensagem []byte) (string, error) {
+	key, err := i.chaveAssinatura()
+	if err != nil {
+		return "", err
+	}
+	defer clear(key)
+	return hex.EncodeToString(ed25519.Sign(key, mensagem)), nil
 }
 func (i *Identidade) PublicaAssinatura() (string, error) {
 	key, err := i.chaveAssinatura()

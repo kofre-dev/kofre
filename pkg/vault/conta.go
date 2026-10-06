@@ -38,3 +38,20 @@ func (mv *ManagedVault) DefinirConta(data []byte) error {
 	mv.dirty = true
 	return nil
 }
+
+func (mv *ManagedVault) BackupContaPendente() []byte {
+	mv.mu.RLock()
+	defer mv.mu.RUnlock()
+	if mv.closed {
+		return nil
+	}
+	return append([]byte(nil), mv.data.ContaBackupPendente...)
+}
+func (mv *ManagedVault) DefinirBackupContaPendente(data []byte) {
+	mv.mu.Lock()
+	defer mv.mu.Unlock()
+	if !mv.closed {
+		mv.data.ContaBackupPendente = append([]byte(nil), data...)
+		mv.dirty = true
+	}
+}

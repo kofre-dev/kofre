@@ -18,6 +18,7 @@ import (
 	"golang.org/x/term"
 	"kofre/pkg/compra"
 	"kofre/pkg/config"
+	"kofre/pkg/conta"
 	"kofre/pkg/corporativo"
 	mycrypto "kofre/pkg/crypto"
 	"kofre/pkg/runner"
@@ -60,6 +61,9 @@ func handleEmpresa(args []string) {
 }
 
 func executarEmpresa(args []string) error {
+	if len(args) > 0 && (args[0] == "entrar" || args[0] == "recuperar-email" || args[0] == "recuperar") {
+		return entrarContaEmail(args[0] != "entrar")
+	}
 	if len(args) == 0 || args[0] == "ajuda" {
 		fmt.Println(`Kofre Empresa — seu cofre pessoal permanece independente.
   criar-conta                         Cria sua identidade sem licença pessoal Pro
@@ -70,7 +74,11 @@ func executarEmpresa(args []string) error {
   cancelar-assinatura <organização>   Interrompe a renovação e mantém o período pago
   conectar                            Ativa a nuvem pessoal gratuita nesta conta
   configurar                         Configura identidade e arquivo de recuperação
-  recuperar                          Troca token usando o arquivo protegido
+  entrar                             Conecta por e-mail e senha mestra
+  recuperar                          Recupera acesso por e-mail e identidade cifrada
+  sessoes                            Lista e encerra sessões dos computadores
+  sair-conta                         Encerra a sessão deste computador
+  backup-conta                       Publica o backup cifrado da identidade
   listar                             Lista suas organizações
   aceitar <organização>              Aceita convite (código solicitado sem eco)
   abrir <organização>                Lista pessoas, equipes, workspaces e itens
@@ -134,7 +142,7 @@ A conta fica protegida pela senha mestra do cofre. Exporte um backup para usar e
 	}
 	var identidade *corporativo.Identidade
 	if args[0] == "criar-conta" {
-		return criarContaEmpresa(path, password)
+		return cadastrarContaEmail(path)
 	}
 	if args[0] == "configurar" {
 		if sessao.cofre.TemConta() {
@@ -163,6 +171,9 @@ A conta fica protegida pela senha mestra do cofre. Exporte um backup para usar e
 		}
 	}
 	defer identidade.Fechar()
+	if err = identidade.ProtegerPrivada(); err != nil {
+		return err
+	}
 	client, err := corporativo.NovoClient(config.GetCloudEndpoint(), identidade)
 	if err != nil {
 		return err
@@ -178,6 +189,22 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		return perguntarEmpresa("Confirmou essa chave com a pessoa por outro canal? [s/N]") == "s"
 	}
 	client.ConfirmarAutor = confirmarChave
+	if args[0] == "sessoes" {
+		return administrarSessoesConta(identidade)
+	}
+	if args[0] == "backup-conta" {
+		return publicarBackupConta(contaEmUso, identidade)
+	}
+	if args[0] == "sair-conta" {
+		c, e := conta.NovoClient(config.GetCloudEndpoint())
+		if e != nil {
+			return e
+		}
+		if e = c.Logout(ctx, identidade.Token); e != nil {
+			return e
+		}
+		return encerrarContaLocal(identidade)
+	}
 	if args[0] == "painel" {
 		return painelEmpresa(path, password, identidade, client)
 	}
@@ -288,35 +315,6 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 			return errors.New("destino já existe; escolha outro arquivo")
 		}
 		return exportarIdentidadeConta(args[1], identidade, password)
-	}
-	if args[0] == "recuperar" {
-		if identidade.RecuperacaoPendente == "" {
-			identidade.RecuperacaoPendente = nonceEmpresa()
-			if identidade.RecuperacaoPendente == "" {
-				return errors.New("falha ao gerar solicitação")
-			}
-			if err = salvarIdentidadeConta(path, identidade, password); err != nil {
-				return err
-			}
-		}
-		var conta struct {
-			Token string `json:"token"`
-		}
-		if err = client.Request(ctx, "POST", "/v1/corporativo/identidades/recuperar", map[string]string{"id": identidade.ID, "recuperacao": identidade.Recuperacao, "solicitacao_id": identidade.RecuperacaoPendente}, &conta); err != nil {
-			return err
-		}
-		identidade.Token = conta.Token
-		identidade.RecuperacaoPendente = ""
-		if err = salvarIdentidadeConta(path, identidade, password); err != nil {
-			return err
-		}
-		fmt.Println("Token trocado; participações e chave de criptografia preservadas.")
-		if cfg, e := config.LoadConfig(); e == nil && cfg.CloudEnabled && cfg.ContaID == identidade.ID {
-			if e = config.AtivarLicencaComprada(config.GetCloudEndpoint(), identidade.Token); e != nil {
-				return fmt.Errorf("identidade recuperada; execute empresa conectar para atualizar a nuvem pessoal: %w", e)
-			}
-		}
-		return nil
 	}
 	if args[0] == "listar" {
 		var resposta map[string]any
@@ -497,6 +495,9 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		if len(args) != 3 {
 			return errors.New("informe o item")
 		}
+		if perguntarEmpresa("Exibir conteúdo secreto no terminal? Digite MOSTRAR") != "MOSTRAR" {
+			return errors.New("exibição cancelada")
+		}
 		data, _, e := client.Ler(ctx, org, args[2])
 		if e != nil {
 			return e
@@ -505,11 +506,7 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		if e = salvarIdentidadeConta(path, identidade, password); e != nil {
 			return e
 		}
-		if perguntarEmpresa("Exibir conteúdo secreto no terminal? Digite MOSTRAR") != "MOSTRAR" {
-			return errors.New("exibição cancelada")
-		}
-		fmt.Println(textoEmpresa(string(data)))
-		return nil
+		return escreverSegredoTerminal(data)
 	case "enviar", "editar", "compartilhar", "compartilhar-equipe", "retirar", "permissao", "recompartilhar":
 		var data []byte
 		var item string
@@ -580,7 +577,13 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 			}
 		}
 		defer mycrypto.ZeroBytes(data)
-		err = client.Gravar(ctx, org, item, workspace, versao, acesso, data, confirmarChave)
+		protegido, e := mycrypto.SealMemory(data)
+		mycrypto.ZeroBytes(data)
+		if e != nil {
+			return e
+		}
+		defer protegido.Close()
+		err = client.GravarProtegido(ctx, org, item, workspace, versao, acesso, protegido, confirmarChave)
 		if err == nil {
 			err = salvarIdentidadeConta(path, identidade, password)
 			if err == nil {
@@ -594,42 +597,4 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		fmt.Println("Operação confirmada pelo Cloud.")
 	}
 	return err
-}
-
-func criarContaEmpresa(path string, password []byte) error {
-	identidade, err := abrirIdentidadeConta(path, password)
-	if errors.Is(err, os.ErrNotExist) {
-		identidade, err = corporativo.PrepararCadastro(perguntarEmpresa("Seu nome"))
-		if err != nil {
-			return err
-		}
-		defer identidade.Fechar()
-		if err = salvarIdentidadeConta(path, identidade, password); err != nil {
-			return err
-		}
-	} else if err == nil {
-		defer identidade.Fechar()
-		if identidade.ID != "" {
-			fmt.Println("Sua conta já está configurada. Use kofre empresa listar.")
-			return nil
-		}
-	} else {
-		return err
-	}
-	client, err := corporativo.NovoClient(config.GetCloudEndpoint(), identidade)
-	if err != nil {
-		return err
-	}
-	if err = client.Cadastrar(context.Background()); err != nil {
-		return fmt.Errorf("cadastro não confirmado; sua identidade foi preservada. Repita criar-conta: %w", err)
-	}
-	if err = salvarIdentidadeConta(path, identidade, password); err != nil {
-		return err
-	}
-	fmt.Println("Conta criada. Identificação para receber convites:", identidade.ID)
-	fmt.Println("Sua conta usa a mesma senha mestra do cofre. Guarde um backup com kofre empresa exportar <arquivo.enc>.")
-	if perguntarEmpresa("Conectar a nuvem Free e sincronizar este cofre agora? [s/N]") == "s" {
-		return executarAcaoEmpresa([]string{"conectar"}, path, password, identidade, client)
-	}
-	return nil
 }

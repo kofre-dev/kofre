@@ -42,6 +42,7 @@ func Wrap(v *Vault, salt []byte) (*ManagedVault, error) {
 	mv := NewManaged()
 	mv.salt = append([]byte(nil), salt...)
 	mv.data.SchemaVersion, mv.data.CreatedAt, mv.data.UpdatedAt = v.SchemaVersion, v.CreatedAt, v.UpdatedAt
+	mv.data.ContaBackupPendente = bytes.Clone(v.ContaBackupPendente)
 	if v.Conta != nil {
 		if !v.Conta.Protected {
 			return nil, errors.New("identidade da conta deve ser protegida")

@@ -61,7 +61,9 @@ func TestContaNoCofreExportaComSenhaMestra(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer got.Fechar()
-	if got.Token != i.Token || !bytes.Equal(got.Privada, i.Privada) {
+	publicaGot, _ := got.Publica()
+	publicaOriginal, _ := i.Publica()
+	if got.Token != i.Token || publicaGot != publicaOriginal {
 		t.Fatal("identidade alterada")
 	}
 	backup := filepath.Join(filepath.Dir(s.arquivo), "backup.enc")

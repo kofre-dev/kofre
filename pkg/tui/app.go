@@ -546,7 +546,13 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshList()
 
 		// Provisiona o envelope do Telegram para futuros desbloqueios sem senha
+		if err := m.enviarBackupContaPendente(); err != nil {
+			m.notification = "Backup da conta pendente. Abra Conta e empresas para revisar a conexão; seu cofre local foi preservado."
+		}
 		var unlockCmd tea.Cmd = m.notify("✓ Cofre desbloqueado em memoria RAM")
+		if m.notification != "" {
+			unlockCmd = m.notify(m.notification)
+		}
 		if cfg, _ := config.LoadConfig(); cfg != nil && cfg.CloudEnabled && cfg.KofreToken != "" && mycrypto.TelegramEnvelopeDeviceID() == "" {
 			keyCopy := append([]byte(nil), key...)
 			unlockCmd = tea.Batch(m.notify("Cofre aberto. Registrando envelope do Telegram..."), saveTelegramEnvelopeCmd(keyCopy, cfg.KofreToken, config.GetCloudEndpoint()))
@@ -1824,7 +1830,7 @@ func (m Model) updateChangePassword(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirmPassInput.Reset()
 		m.state = ViewList
 		m.err = nil
-		if strings.HasPrefix(m.notification, "Senha alterada. Telegram pendente:") {
+		if strings.HasPrefix(m.notification, "Senha alterada.") {
 			return m, m.notify(m.notification)
 		}
 		return m, m.notify("✓ Senha mestre alterada com sucesso! Cofre recriptografado com novo salt.")
@@ -1849,6 +1855,18 @@ func (m *Model) changePassword(newPass []byte) error {
 		return fmt.Errorf("falha na derivação da chave: %w", err)
 	}
 	defer mycrypto.ZeroBytes(newKey)
+	backup, err := m.prepararBackupNovaSenha(newKey, newSalt)
+	if err != nil {
+		return err
+	}
+	backupAnterior := m.vault.BackupContaPendente()
+	m.vault.DefinirBackupContaPendente(backup)
+	salvo := false
+	defer func() {
+		if !salvo {
+			m.vault.DefinirBackupContaPendente(backupAnterior)
+		}
+	}()
 
 	// Re-criptografa o cofre com a nova chave e novo salt
 	packed, err := m.vault.Pack(newKey, newSalt)
@@ -1872,6 +1890,7 @@ func (m *Model) changePassword(newPass []byte) error {
 	if err := m.storage.Save(ctx, packed); err != nil {
 		return fmt.Errorf("falha ao salvar cofre: %w", err)
 	}
+	salvo = true
 
 	if m.sessionKey != nil {
 		m.sessionKey.Close()
@@ -1879,6 +1898,9 @@ func (m *Model) changePassword(newPass []byte) error {
 	m.sessionKey = newSealedKey
 	m.salt = newSalt
 	m.vault.MarkClean()
+	if err = m.enviarBackupContaPendente(); err != nil {
+		m.notification = "Senha alterada. Backup da conta pendente; use a nova senha neste PC. A próxima abertura tentará novamente."
+	}
 
 	// A nova senha já está persistida; uma falha do Telegram não pode ser apresentada como rollback.
 	if cfg, _ := config.LoadConfig(); cfg != nil && cfg.CloudEnabled && cfg.KofreToken != "" && mycrypto.HasTelegramUnlockEnvelope() {

@@ -55,11 +55,12 @@ type SecretEntry struct {
 
 // Vault representa a colecao completa de segredos descriptografados em memoria
 type Vault struct {
-	SchemaVersion int           `json:"schema_version"`
-	CreatedAt     time.Time     `json:"created_at"`
-	UpdatedAt     time.Time     `json:"updated_at"`
-	Entries       []SecretEntry `json:"entries"`
-	Conta         *Field        `json:"conta,omitempty"`
+	SchemaVersion       int           `json:"schema_version"`
+	CreatedAt           time.Time     `json:"created_at"`
+	UpdatedAt           time.Time     `json:"updated_at"`
+	Entries             []SecretEntry `json:"entries"`
+	Conta               *Field        `json:"conta,omitempty"`
+	ContaBackupPendente []byte        `json:"conta_backup_pendente,omitempty"` // somente cifra, assinatura e revisão
 }
 
 // NewVault cria uma nova instancia vazia do cofre
