@@ -34,19 +34,24 @@ func (m Model) painelPro() string {
 		b.WriteString(botao.Render("Reabrir navegador  [r]  →") + "\n\n")
 		b.WriteString(texto.Render("[x] Interromper espera"))
 	} else {
-		b.WriteString(centro.Foreground(m.cores().Suave).Render("Seu cofre, conectado entre PCs.") + "\n\n")
+		b.WriteString(centro.Foreground(m.cores().Suave).Render("Mais controle sobre seu cofre pessoal.") + "\n\n")
 		for _, beneficio := range []string{
-			"✓ Sincronização com criptografia E2E",
-			"✓ Acesso nos seus computadores",
+			"✓ Histórico cifrado com restauração",
+			"✓ Mais espaço para o cofre sincronizado",
 			"✓ Desbloqueio e recuperação pelo Telegram",
 			"✓ Bloqueio de pânico pelo Telegram",
 		} {
 			b.WriteString(texto.Render(beneficio) + "\n")
 		}
-		b.WriteString("\n" + botao.Render("Conhecer planos e comprar  [Enter]  →") + "\n\n")
+		b.WriteString("\n" + botao.Render("Assinar Pro pessoal  [Enter]  →") + "\n\n")
 		b.WriteString(texto.Render("Compra no navegador, vinculada a este Kofre.") + "\n")
 		b.WriteString(texto.Render("Após pagar, mantenha o app aberto para ativar.") + "\n")
 		b.WriteString(texto.Render("Mantenha também seus backups locais."))
+		if m.vault != nil {
+			b.WriteString("\n\n" + texto.Render("Para sua equipe: [Ctrl+E] Conta e empresas."))
+		} else {
+			b.WriteString("\n\n" + texto.Render("Corporativo: abra o cofre e use [Ctrl+E]."))
+		}
 	}
 	b.WriteString("\n\n" + lipgloss.NewStyle().Foreground(m.cores().Borda).Render(strings.Repeat("─", conteudo)))
 	voltar := "[Esc] Voltar"

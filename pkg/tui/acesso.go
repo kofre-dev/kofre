@@ -33,6 +33,16 @@ func (m Model) cabecalhoAcesso() string {
 	if m.state == ViewList {
 		larguraQuadro = w + 2
 	}
+	if m.vault != nil && m.state != ViewUnlock && m.state != ViewTelegramChallenge {
+		// Mesma cor do indicador da landing; VS15 solicita glifo de texto sem cores de emoji.
+		status := lipgloss.NewStyle().Foreground(lipgloss.Color("#67E8B3")).Render("\U0001F513\uFE0E ABERTO")
+		espaco := larguraQuadro - lipgloss.Width(esquerda) - lipgloss.Width(status)
+		if espaco >= 2 {
+			esquerda = lipgloss.JoinHorizontal(lipgloss.Center, esquerda, strings.Repeat(" ", espaco), status)
+		} else {
+			esquerda += "\n" + lipgloss.NewStyle().Width(larguraQuadro).Align(lipgloss.Right).Render(status)
+		}
+	}
 	return esquerda + "\n" + lipgloss.NewStyle().Foreground(m.cores().Destaque).Render(strings.Repeat("─", larguraQuadro))
 }
 

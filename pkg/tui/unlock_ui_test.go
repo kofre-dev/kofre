@@ -81,3 +81,24 @@ func TestAcessoCabeNaJanela(t *testing.T) {
 		m.passInput.Reset()
 	}
 }
+
+func TestIndicadorAcompanhaBloqueioDoCofre(t *testing.T) {
+	m := fixtureModel(t)
+	for _, largura := range []int{40, 80, 120} {
+		m.width = largura
+		for _, estado := range []ViewState{ViewList, ViewPro} {
+			m.state = estado
+			cabecalho := ansi.Strip(m.renderHeader())
+			if !strings.Contains(cabecalho, "\U0001F513\uFE0E ABERTO") || lipgloss.Width(cabecalho) > largura {
+				t.Fatalf("indicador ausente ou fora da janela de %d colunas", largura)
+			}
+		}
+	}
+	m.lock()
+	for _, estado := range []ViewState{ViewUnlock, ViewPro} {
+		m.state = estado
+		if strings.Contains(ansi.Strip(m.renderHeader()), "ABERTO") {
+			t.Fatal("cofre bloqueado foi apresentado como desbloqueado")
+		}
+	}
+}
