@@ -2,6 +2,10 @@
 
 Este documento descreve detalhadamente a arquitetura criptográfica, o fluxo de dados, a integração com a nuvem (S3 / Railway) e o funcionamento do Bot oficial do Telegram.
 
+Atualização do candidato 1.0.20: [formato KOFRE003](FORMATO_KOFRE003.md),
+[controles e evidências](REFORCO_SEGURANCA_1_0.md) e
+[atualizações assinadas](ATUALIZACOES_ASSINADAS.md).
+
 ---
 
 ## 1. Princípio Fundamental: Zero-Knowledge (E2EE)
@@ -28,7 +32,8 @@ A decifração acontece **exclusivamente na memória RAM do seu computador local
        │  1. Argon2id (64MB / 3 iters) │
        │     Gera chave AES de 256-bit │
        │  2. AES-256-GCM               │
-       │     Decifra o payload         │
+       │     Abre chave aleatória      │
+       │     e detalhes por item       │
        │  3. Injeta no processo filho  │
        │     ou exibe na tela TUI      │
        │  4. ZeroBytes() na saída      │
@@ -39,14 +44,19 @@ A decifração acontece **exclusivamente na memória RAM do seu computador local
 1. **Download do Blob:** O `kofre.exe` faz um `GET /v1/vault` para a API.
 2. **Entrega Criptografada:** A API no Railway busca o arquivo no S3 e o devolve para o `kofre.exe` **ainda 100% criptografado** via canal seguro HTTPS (TLS).
 3. **Desbloqueio Local:** O seu terminal pede a sua **Master Password**.
-4. **Decifração em RAM:** O seu processador executa o Argon2id, deriva a chave e abre o cofre na memória RAM volátil.
+4. **Decifração em RAM:** Argon2id deriva a chave que abre o envelope da chave aleatória do cofre. Essa chave abre o catálogo e os detalhes autenticados por item; campos protegidos, notas e anexos ficam selados quando ociosos. Somente após autenticar o candidato baixado ele substitui a cópia local, preservando backup.
 5. **Limpeza da RAM:** Ao bloquear ou encerrar, o Kofre sobrescreve os buffers sob seu controle e fecha as chaves/campos selados. Não consegue garantir a limpeza de cópias produzidas pelo sistema operacional, runtime, terminal, clipboard ou processo filho. Uma máquina comprometida continua sendo um risco.
 
 ---
 
 ## 3. Estrutura Criptográfica do Arquivo (`vault.enc`)
 
-O arquivo gravado no disco e no S3 possui a seguinte estrutura binária:
+Novas gravações usam **KOFRE003**: cabeçalho e salt, identificador aleatório,
+chave de dados cifrada e catálogo cifrado contendo detalhes cifrados por item.
+O [documento do formato](FORMATO_KOFRE003.md) descreve offsets e autenticação.
+A troca da senha renova também a chave aleatória dos dados; a senha não é salva.
+
+A tabela abaixo descreve somente os formatos anteriores, ainda aceitos na leitura:
 
 | Offset | Tamanho | Campo | Descrição |
 |---|---|---|---|
@@ -87,9 +97,10 @@ sequenceDiagram
     Client->>API: GET /v1/vault
     API->>S3: Recupera vaults/{userID}/vault.enc
     API-->>Client: Devolve blob criptografado
-    Client->>Client: Grava vault.enc local
     Dev->>Client: Digita Master Password no terminal
-    Client->>Client: Decifra na RAM e abre TUI
+    Client->>Client: Autentica e decifra candidato na RAM
+    Client->>Client: Preserva backup e instala cópia validada
+    Client->>Client: Confirma revisão e abre TUI
 ```
 
 ---
@@ -119,6 +130,11 @@ Cada envelope tem um `device_id` e um segredo remoto próprio. Envelope novo nã
 
 A sincronização preserva `vault.enc.sync-pending.json` até confirmar o envio. Falha remota mantém o estado local e pendente; reiniciar retoma o envio. Troca de destino com pendência é recusada. O encerramento informa se o prazo do `Flush` terminou antes da confirmação.
 
-Os instaladores e o updater exigem checksum SHA-256 e tamanho; downloads usam uma versão específica. Gravações locais preparam e sincronizam um temporário antes de substituir o destino, sem apagar o arquivo anterior em caso de falha.
+O updater exige assinatura Ed25519 por uma raiz compilada, além de SHA-256,
+tamanho, versão e validade. A chave privada de publicação não está no Cloud.
+Instaladores gerados pelo servidor validam os metadados assinados, mas a primeira
+execução de um script obtido do site ainda confia nesse canal. Downloads usam
+uma versão específica. Gravações locais preparam e sincronizam um temporário
+antes de substituir o destino, sem apagar o arquivo anterior em caso de falha.
 
 Veja [contratos de migração e validação](../../kofre-cloud/docs/AJUSTES_SEGURANCA.md). Builds Windows, Linux e macOS foram reconferidos; execução de APIs Windows e smoke são validados no Windows.

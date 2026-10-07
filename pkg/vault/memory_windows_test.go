@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"golang.org/x/sys/windows"
@@ -29,7 +30,13 @@ func TestProtectedVaultMemoryIsolation(t *testing.T) {
 	hex.Encode(canary, seed)
 	key, salt := make([]byte, 32), make([]byte, 16)
 	plain := append([]byte(`{"schema_version":1,"entries":[{"id":"fixture","title":"Fixture","fields":[{"name":"Senha","protected":true,"value":"`), canary...)
-	plain = append(plain, []byte(`"}]}]}`)...)
+	plain = append(plain, []byte(`"}],"notes":"`)...)
+	plain = append(plain, canary...)
+	plain = append(plain, []byte(`","attachments":[{"filename":"ficticio.bin","data":"`)...)
+	encodedCanary := make([]byte, base64.StdEncoding.EncodedLen(len(canary)))
+	base64.StdEncoding.Encode(encodedCanary, canary)
+	plain = append(plain, encodedCanary...)
+	plain = append(plain, []byte(`","size":48}]}]}`)...)
 	payload, err := mycrypto.Encrypt(plain, key)
 	mycrypto.ZeroBytes(plain)
 	if err != nil {
@@ -67,7 +74,7 @@ func TestProtectedVaultMemoryIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer windows.CloseHandle(handle)
-	for _, stage := range []string{"loaded", "create", "update", "pack", "close", "positive"} {
+	for _, stage := range []string{"loaded", "create", "update", "pack", "openV3", "close", "positive"} {
 		if stage != "loaded" {
 			fmt.Fprintln(stdin, stage)
 			ready()
@@ -91,6 +98,9 @@ func scanFixtureMemory(t *testing.T, h windows.Handle, canary []byte) (found int
 	t.Helper()
 	// UTF-8, UTF-16LE e []rune (UTF-32LE) usados pelos componentes do terminal.
 	patterns := [][]byte{canary, make([]byte, len(canary)*2), make([]byte, len(canary)*4)}
+	base64Canary := make([]byte, base64.StdEncoding.EncodedLen(len(canary)))
+	base64.StdEncoding.Encode(base64Canary, canary)
+	patterns = append(patterns, base64Canary)
 	for i, c := range canary {
 		patterns[1][2*i] = c
 		patterns[2][4*i] = c
@@ -149,6 +159,7 @@ func TestProtectedVaultMemoryChild(t *testing.T) {
 	}
 	defer v.Close()
 	var positive []byte
+	var packed []byte
 	fmt.Println("ready")
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
@@ -161,7 +172,12 @@ func TestProtectedVaultMemoryChild(t *testing.T) {
 					return e
 				}
 				defer field.Close()
-				_, e = v.AddEntry(SecretEntry{ID: "created", Title: "Criada", Fields: []Field{field}})
+				created := SecretEntry{ID: "created", Title: "Criada", Fields: []Field{field}, Attachments: entry.Attachments}
+				if e := entry.WithNotes(created.SetNotes); e != nil {
+					return e
+				}
+				defer created.CloseNotes()
+				_, e = v.AddEntry(created)
 				return e
 			})
 			if err != nil {
@@ -177,7 +193,14 @@ func TestProtectedVaultMemoryChild(t *testing.T) {
 				t.Fatal(err)
 			}
 		case "pack":
-			if _, err := v.Pack(key, salt); err != nil {
+			packed, err = v.Pack(key, salt)
+			if err != nil {
+				t.Fatal(err)
+			}
+		case "openV3":
+			v.Close()
+			v, err = DecryptAndLoad(packed, key, salt)
+			if err != nil {
 				t.Fatal(err)
 			}
 		case "close":

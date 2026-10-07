@@ -26,7 +26,7 @@ func TestContaSegueSenhaSemParticiparDasCredenciais(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(packed, ContaMagicHeader) || bytes.Contains(packed, identidade) {
+	if !bytes.HasPrefix(packed, EnvelopeMagicHeader) || bytes.Contains(packed, identidade) {
 		t.Fatal("identidade exposta ou formato sem proteção contra downgrade")
 	}
 	s, payload, err := UnpackHeader(packed)

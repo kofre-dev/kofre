@@ -220,6 +220,7 @@ func entrarContaEmail(recuperar bool) error {
 	defer mycrypto.ZeroBytes(senha)
 	path := resolveVaultPath("")
 	raw, err := os.ReadFile(path)
+	existiaLocal := err == nil
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -291,7 +292,11 @@ func entrarContaEmail(recuperar bool) error {
 	if err != nil {
 		return err
 	}
-	cloud := storage.NewKofreCloudStorage(config.GetCloudEndpoint(), i.Token, i.ID)
+	cloud, err := nuvemContaComRevisao(path, i)
+	if err != nil {
+		return err
+	}
+	var baseRemotaValidada []byte
 	// Destino vazio pode recuperar o cofre remoto. Destino com entradas permanece
 	// intacto e exige resolução explícita de conflitos pelo mecanismo de sync.
 	if v.Count() == 0 {
@@ -303,6 +308,7 @@ func entrarContaEmail(recuperar bool) error {
 			}
 			defer av.Close()
 			defer mycrypto.ZeroBytes(k)
+			baseRemotaValidada = remoto
 			v = av
 			key = k
 			salt = sa
@@ -322,22 +328,19 @@ func entrarContaEmail(recuperar bool) error {
 	if err != nil {
 		return err
 	}
-	if len(raw) > 0 {
-		if _, err = local.PreservarBackup(context.Background(), packed); err != nil {
-			return err
-		}
-	}
-	atual, e := os.ReadFile(path)
-	if e != nil && !errors.Is(e, os.ErrNotExist) {
-		return e
-	}
-	if !bytes.Equal(raw, atual) {
-		return errors.New("cofre mudou durante o login; operação cancelada")
-	}
-	if err = local.Save(context.Background(), packed); err != nil {
+	// Confere a base e preserva backup sob o mesmo lock que protege a
+	// substituição; outro cliente não pode gravar entre a conferência e o save.
+	if _, err = local.SubstituirSeIgual(context.Background(), raw, existiaLocal, packed); err != nil {
 		return err
 	}
 	confirmada = true
+	if baseRemotaValidada != nil {
+		// O conteúdo baixado foi autenticado antes de gerar e instalar packed.
+		// Reconhece essa base somente agora; o próximo envio continua com CAS.
+		if err = cloud.ConfirmarLeitura(baseRemotaValidada); err != nil {
+			return fmt.Errorf("conta salva localmente; revisão da nuvem pendente: %w", err)
+		}
+	}
 	// A sessão foi salva no cofre. Uma falha abaixo não é um rollback do login.
 	if err = config.AtivarLicencaComprada(config.GetCloudEndpoint(), i.Token); err != nil {
 		return fmt.Errorf("acesso salvo no cofre; conexão da nuvem pendente: %w", err)
@@ -347,6 +350,16 @@ func entrarContaEmail(recuperar bool) error {
 		fmt.Println("Cofre local preservado. Sincronização pendente; confira os conflitos antes de enviar.")
 	}
 	return nil
+}
+
+// A primeira sincronização da conta precisa persistir a mesma base que será
+// usada ao reabrir a TUI; confirmar apenas em RAM cria conflitos no reinício.
+func nuvemContaComRevisao(path string, i *corporativo.Identidade) (*storage.KofreCloudStorage, error) {
+	cloud := storage.NewKofreCloudStorage(config.GetCloudEndpoint(), i.Token, i.ID)
+	if err := cloud.DefinirArquivoRevisao(path + ".cloud-revision.json"); err != nil {
+		return nil, err
+	}
+	return cloud, nil
 }
 
 func administrarSessoesConta(i *corporativo.Identidade) error {

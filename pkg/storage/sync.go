@@ -26,6 +26,13 @@ type SyncStorage struct {
 	cancel           context.CancelFunc
 	wake, changed    chan struct{}
 	done             chan struct{}
+	candidato        *cargaRemota
+}
+
+// Uma leitura remota ainda não é uma base editável: falta autenticar o conteúdo.
+type cargaRemota struct {
+	dados, anterior []byte
+	tinhaLocal      bool
 }
 
 func NewSyncStorage(local, remote StorageProvider) *SyncStorage {
@@ -71,21 +78,20 @@ func (s *SyncStorage) Load(ctx context.Context) ([]byte, error) {
 	if s.initErr != nil {
 		return nil, s.initErr
 	}
+	if s.candidato != nil {
+		return bytes.Clone(s.candidato.dados), nil
+	}
 	data, err := s.local.Load(ctx)
 	if err == nil {
 		cloud, gerenciada := s.remote.(*KofreCloudStorage)
-		local, arquivoLocal := s.local.(*LocalStorage)
+		_, arquivoLocal := s.local.(*LocalStorage)
 		if gerenciada && arquivoLocal && s.pending == nil && cloud.coincideComBase(data) {
 			timeout, cancel := context.WithTimeout(ctx, 3*time.Second)
 			remoto, falha := cloud.Load(timeout)
 			cancel()
-			if falha == nil && !bytes.Equal(data, remoto) {
-				if _, falha = local.SaveComBackup(ctx, remoto); falha == nil {
-					data = remoto
-					falha = cloud.ConfirmarLeitura(remoto)
-				}
-			} else if falha == nil {
-				falha = cloud.ConfirmarLeitura(remoto)
+			if falha == nil {
+				s.candidato = &cargaRemota{dados: bytes.Clone(remoto), anterior: bytes.Clone(data), tinhaLocal: true}
+				data = remoto
 			}
 			s.lastErr = falha // Offline conserva a cópia local e informa a pendência.
 		}
@@ -101,21 +107,65 @@ func (s *SyncStorage) Load(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = s.local.Save(ctx, data); err != nil {
-		return nil, err
+	s.candidato = &cargaRemota{dados: bytes.Clone(data)}
+	return data, nil
+}
+
+// ConfirmarCarga instala somente o candidato que o chamador já decifrou e
+// validou. Uma senha errada, formato inválido ou falha de autenticação nunca
+// deve chegar aqui. Até esta etapa Load não altera o arquivo nem sua revisão.
+func (s *SyncStorage) ConfirmarCarga(ctx context.Context, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.initErr != nil {
+		return s.initErr
 	}
-	if cloud, ok := s.remote.(*KofreCloudStorage); ok {
-		if err = cloud.ConfirmarLeitura(data); err != nil {
-			return nil, err
+	if s.candidato == nil {
+		return nil
+	}
+	candidato := s.candidato
+	if !bytes.Equal(candidato.dados, data) {
+		return errors.New("conteúdo validado diverge do candidato recebido")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var err error
+	if local, ok := s.local.(*LocalStorage); ok {
+		_, err = local.SubstituirSeIgual(ctx, candidato.anterior, candidato.tinhaLocal, data)
+	} else {
+		atual, e := s.local.Load(ctx)
+		if e != nil && !errors.Is(e, ErrNotFound) {
+			return e
+		}
+		if (e == nil) != candidato.tinhaLocal || !bytes.Equal(atual, candidato.anterior) {
+			return fmt.Errorf("%w: cofre local mudou durante a validação; cópias preservadas", ErrConflito)
+		}
+		if !candidato.tinhaLocal || !bytes.Equal(atual, data) {
+			err = s.local.Save(ctx, data)
 		}
 	}
-	return data, nil
+	if err != nil {
+		return err
+	}
+	// Atualiza a pré-condição para permitir repetir somente o ACK, se ele falhar.
+	candidato.anterior, candidato.tinhaLocal = bytes.Clone(data), true
+	if cloud, ok := s.remote.(*KofreCloudStorage); ok {
+		if err = cloud.ConfirmarLeitura(data); err != nil {
+			return fmt.Errorf("cofre autenticado salvo; confirmação da revisão pendente: %w", err)
+		}
+	}
+	s.candidato = nil
+	return nil
 }
 func (s *SyncStorage) Save(ctx context.Context, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.initErr != nil {
 		return s.initErr
+	}
+	if s.candidato != nil {
+		return errors.New("valide e confirme o cofre recebido antes de salvar alterações")
 	}
 	if err := s.ctx.Err(); err != nil {
 		return errors.New("sincronização encerrada")
@@ -237,6 +287,14 @@ func (s *SyncStorage) Close() { s.cancel(); <-s.done }
 
 // Permite reabrir a sincronização após trocar a configuração de conta.
 func (s *SyncStorage) Providers() (StorageProvider, StorageProvider) { return s.local, s.remote }
+
+// Path identifica o arquivo local também quando a sincronização está ativa.
+func (s *SyncStorage) Path() string {
+	if local, ok := s.local.(interface{ Path() string }); ok {
+		return local.Path()
+	}
+	return ""
+}
 func (s *SyncStorage) Exists(ctx context.Context) (bool, error) {
 	if s.initErr != nil {
 		return false, s.initErr

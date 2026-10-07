@@ -2,6 +2,7 @@ package vault
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	mycrypto "kofre/pkg/crypto"
@@ -79,7 +80,13 @@ func (f Field) WithValue(use func([]byte) error) error {
 
 // sealEntry cria novos buffers; não adota slices nem segredos do chamador.
 func sealEntry(entry SecretEntry) (SecretEntry, error) {
+	previousNotes := entry.notes
+	entry.notes = nil
+	entry.notesTemporary = false
 	entry.Fields = append([]Field(nil), entry.Fields...)
+	// Os handles de origem pertencem ao chamador; só fechamos cópias nossas.
+	sourceAttachments := entry.Attachments
+	entry.Attachments = nil
 	for i := range entry.Fields {
 		f := &entry.Fields[i]
 		if !f.Protected {
@@ -103,9 +110,39 @@ func sealEntry(entry SecretEntry) (SecretEntry, error) {
 			return SecretEntry{}, err
 		}
 	}
-	entry.Attachments = append([]Attachment(nil), entry.Attachments...)
-	for i := range entry.Attachments {
-		entry.Attachments[i].Data = append([]byte(nil), entry.Attachments[i].Data...)
+	sealNotes := func(value []byte) error {
+		if len(value) == 0 {
+			return nil
+		}
+		var err error
+		entry.notes, err = mycrypto.SealMemory(value)
+		return err
+	}
+	var err error
+	if entry.Notes != "" || previousNotes == nil {
+		plain := []byte(entry.Notes)
+		err = sealNotes(plain)
+		mycrypto.ZeroBytes(plain)
+	} else {
+		err = previousNotes.WithBytes(sealNotes)
+	}
+	entry.Notes = ""
+	if err != nil {
+		closeEntry(&entry)
+		return SecretEntry{}, err
+	}
+	for _, original := range sourceAttachments {
+		attachment := Attachment{Filename: original.Filename}
+		err = original.WithData(func(value []byte) error {
+			attachment.Size = int64(len(value))
+			attachment.sealed, err = mycrypto.SealMemory(value)
+			return err
+		})
+		if err != nil {
+			closeEntry(&entry)
+			return SecretEntry{}, err
+		}
+		entry.Attachments = append(entry.Attachments, attachment)
 	}
 	return entry, nil
 }
@@ -113,9 +150,6 @@ func sealEntry(entry SecretEntry) (SecretEntry, error) {
 func cloneEntry(entry SecretEntry) SecretEntry {
 	entry.Fields = append([]Field(nil), entry.Fields...)
 	entry.Attachments = append([]Attachment(nil), entry.Attachments...)
-	for i := range entry.Attachments {
-		entry.Attachments[i].Data = append([]byte(nil), entry.Attachments[i].Data...)
-	}
 	return entry
 }
 
@@ -126,7 +160,9 @@ func closeEntry(entry *SecretEntry) {
 	}
 	for i := range entry.Attachments {
 		mycrypto.ZeroBytes(entry.Attachments[i].Data)
+		entry.Attachments[i].sealed.Close()
 	}
+	entry.notes.Close()
 	*entry = SecretEntry{}
 }
 
@@ -269,10 +305,15 @@ func marshalVault(v *Vault) (result []byte, err error) {
 		}
 		fields := entry.Fields
 		entry.Fields = nil
+		attachments := entry.Attachments
+		entry.Attachments = nil
+		type publicEntry SecretEntry
+		metadata := publicEntry(entry)
 		encoded, e := json.Marshal(struct {
-			*SecretEntry
+			*publicEntry
 			Fields []Field `json:"fields,omitempty"`
-		}{SecretEntry: &entry})
+			Notes  *string `json:"notes,omitempty"`
+		}{publicEntry: &metadata})
 		if e != nil {
 			return result, e
 		}
@@ -299,7 +340,46 @@ func marshalVault(v *Vault) (result []byte, err error) {
 				appendSafe([]byte(`,"protected":false}`))
 			}
 		}
-		appendSafe([]byte("]}"))
+		appendSafe([]byte(`],"notes":`))
+		err = entry.WithNotes(func(value []byte) error {
+			quoted := appendQuotedBytes(value)
+			defer mycrypto.ZeroBytes(quoted)
+			appendSafe(quoted)
+			return nil
+		})
+		if err != nil {
+			return result, err
+		}
+		if len(attachments) > 0 {
+			appendSafe([]byte(`,"attachments":[`))
+			for j, attachment := range attachments {
+				if j > 0 {
+					appendSafe([]byte(","))
+				}
+				metadata, e := json.Marshal(struct {
+					Filename string `json:"filename"`
+					Size     int64  `json:"size"`
+				}{attachment.Filename, attachment.Size})
+				if e != nil {
+					return result, e
+				}
+				appendSafe(metadata[:len(metadata)-1])
+				appendSafe([]byte(`,"data":"`))
+				err = attachment.WithData(func(value []byte) error {
+					encoded := make([]byte, base64.StdEncoding.EncodedLen(len(value)))
+					defer mycrypto.ZeroBytes(encoded)
+					base64.StdEncoding.Encode(encoded, value)
+					appendSafe(encoded)
+					return nil
+				})
+				if err != nil {
+					return result, err
+				}
+				appendSafe([]byte(`"}`))
+			}
+			appendSafe([]byte("]"))
+		}
+		appendSafe([]byte("}"))
 	}
 	appendSafe([]byte("]}"))
 	return result, nil

@@ -130,15 +130,8 @@ func (s *sessaoConta) salvar(i *corporativo.Identidade) error {
 	if err != nil {
 		return err
 	}
-	if !bytes.HasPrefix(s.base, vault.ContaMagicHeader) {
-		local, e := storage.NewLocalStorage(s.arquivo)
-		if e != nil {
-			return e
-		}
-		if _, e = local.PreservarBackup(context.Background(), packed); e != nil {
-			return e
-		}
-	}
+	// LocalStorage preserva a base legada ao migrar para KOFRE003; gravações
+	// posteriores não precisam gerar um novo backup de migração.
 	store, err := resolveActiveStorageProvider(s.arquivo, "", "", "", "")
 	if err != nil {
 		return err

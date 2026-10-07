@@ -8,9 +8,185 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	mycrypto "kofre/pkg/crypto"
 	"kofre/pkg/vault"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestClipboardRetentaSemPerderControleOuApagarNovoConteudo(t *testing.T) {
+	previousRead, previousWrite := readClipboard, writeClipboard
+	t.Cleanup(func() { readClipboard, writeClipboard = previousRead, previousWrite })
+	clipboardValue := "fixture"
+	falhar := true
+	tentativas := 0
+	readClipboard = func() (string, error) { return clipboardValue, nil }
+	writeClipboard = func(s string) error {
+		tentativas++
+		if falhar {
+			return errors.New("ocupado")
+		}
+		clipboardValue = s
+		return nil
+	}
+	m := fixtureModel(t)
+	m.clipboardHash, m.clipboardOwned = sha256.Sum256([]byte(clipboardValue)), true
+	m.clearClipboard()
+	if !m.clipboardOwned || m.err == nil {
+		t.Fatal("falha de limpeza foi tratada como sucesso")
+	}
+	falhar = false
+	m.clipboardRetryAt = time.Now().Add(-time.Second)
+	next, _ := m.Update(securityTickMsg{})
+	m = next.(Model)
+	if clipboardValue != "" || m.clipboardOwned || tentativas != 2 {
+		t.Fatal("limpeza não foi repetida após falha transitória")
+	}
+	clipboardValue = "fixture"
+	m.clipboardHash, m.clipboardOwned = sha256.Sum256([]byte(clipboardValue)), true
+	falhar = true
+	m.clearClipboard()
+	clipboardValue = "outro aplicativo"
+	m.clearClipboard()
+	if clipboardValue != "outro aplicativo" || m.clipboardOwned {
+		t.Fatal("limpeza interferiu no conteúdo de outro aplicativo")
+	}
+}
+
+func TestClipboardFalhaPersistenteTemLimite(t *testing.T) {
+	previousRead, previousWrite := readClipboard, writeClipboard
+	t.Cleanup(func() { readClipboard, writeClipboard = previousRead, previousWrite })
+	tentativas := 0
+	readClipboard = func() (string, error) { tentativas++; return "", errors.New("ocupado") }
+	m := fixtureModel(t)
+	m.clipboardOwned = true
+	for i := 0; i < 10; i++ {
+		m.clearClipboard()
+	}
+	if tentativas != 3 || !m.clipboardOwned || m.err == nil {
+		t.Fatal("falha não foi limitada e informada")
+	}
+	m.clipboardOwned = false // Evita repetir o aviso da fixture no cleanup.
+}
+
+func TestNotasNaoVazamNaViewEEdicaoPreservaConteudo(t *testing.T) {
+	m := fixtureModel(t)
+	const nota = "nota-ficticia-nao-pode-aparecer-na-view"
+	entry, err := m.vault.AddEntry(vault.SecretEntry{Title: "Teste", Notes: nota})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.selectedEntry = entry
+	m.state = ViewDetail
+	if strings.Contains(m.viewDetail(), nota) {
+		t.Fatal("nota apareceu no buffer de renderização")
+	}
+	if !m.notasSelecionadas() {
+		t.Fatal("nota sem campos não pode ser selecionada")
+	}
+	m.initForm(entry, true)
+	if strings.Contains(m.viewForm(), nota) {
+		t.Fatal("nota apareceu no formulário sem revelação")
+	}
+	m.formInputs[0].SetValue("Novo título")
+	next, _ := m.saveForm()
+	m = next.(Model)
+	if m.err != nil {
+		t.Fatal(m.err)
+	}
+	atual, err := m.vault.GetEntry(entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = atual.WithNotes(func(b []byte) error {
+		if string(b) != nota {
+			t.Fatal("edição descartou nota protegida")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m.lock()
+	if err = atual.WithNotes(func([]byte) error { return nil }); err == nil {
+		t.Fatal("lock deixou nota acessível")
+	}
+}
+
+type confirmarStore struct {
+	memoryStore
+	confirmacoes int
+	confirmarErr error
+}
+
+func (s *confirmarStore) ConfirmarCarga(context.Context, []byte) error {
+	s.confirmacoes++
+	return s.confirmarErr
+}
+
+func TestDesbloqueioConfirmaCargaSomenteDepoisDaAutenticacao(t *testing.T) {
+	key, salt, err := mycrypto.DeriveKeyBytes([]byte("teste123"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mycrypto.ZeroBytes(key)
+	v := vault.NewManaged()
+	defer v.Close()
+	data, err := v.Pack(key, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &confirmarStore{memoryStore: memoryStore{data: data}, confirmarErr: errors.New("conflito local")}
+	m := NewModel(s)
+	defer func() { m.Close() }()
+	m.passInput.SetValue("incorreta")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if s.confirmacoes != 0 {
+		t.Fatal("senha errada promoveu candidato")
+	}
+	m.passInput.SetValue("teste123")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if s.confirmacoes != 1 || m.vault != nil || m.state != ViewUnlock {
+		t.Fatal("falha de confirmação abriu sessão")
+	}
+	s.confirmarErr = nil
+	m.passInput.SetValue("teste123")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if s.confirmacoes != 2 || m.vault == nil || m.state != ViewList {
+		t.Fatalf("candidato validado não abriu: %v", m.err)
+	}
+}
+
+func TestTresErrosImpedemNovaTentativaMesmoComSenhaCorreta(t *testing.T) {
+	key, salt, err := mycrypto.DeriveKeyBytes([]byte("teste123"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mycrypto.ZeroBytes(key)
+	v := vault.NewManaged()
+	defer v.Close()
+	data, err := v.Pack(key, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(&memoryStore{data: data})
+	defer func() { m.Close() }()
+	for i := 0; i < 3; i++ {
+		m.passInput.SetValue("errada")
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = next.(Model)
+	}
+	m.passInput.SetValue("teste123")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.vault != nil || m.err == nil || !strings.Contains(m.err.Error(), "aguarde") {
+		t.Fatalf("espera não aplicada: %v", m.err)
+	}
+	if !strings.Contains(m.painelAcesso(), "Aguarde") {
+		t.Fatal("contador não aparece na tela")
+	}
+}
 
 func TestClipboardExpiryPreservesExternalContent(t *testing.T) {
 	previousRead, previousWrite := readClipboard, writeClipboard
@@ -296,4 +472,3 @@ func TestViewDetailNeverExposesProtectedSecret(t *testing.T) {
 		t.Fatal("FALHA: viewDetail expos segredo apos pressionar 'v'!")
 	}
 }
-

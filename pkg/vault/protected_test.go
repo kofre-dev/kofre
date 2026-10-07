@@ -41,7 +41,9 @@ func TestProtectedFieldWireCompatibility(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			plain, err := mycrypto.Decrypt(payload, key)
+			// Exportação controlada preserva o schema legível por importadores;
+			// o envelope KOFRE003 em disco é intencionalmente novo.
+			plain, err := marshalVault(v.data)
 			if err != nil {
 				t.Fatal(err)
 			}

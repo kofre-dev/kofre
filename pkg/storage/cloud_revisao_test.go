@@ -135,6 +135,9 @@ func TestSyncBuscaNovaVersaoSemPerderBackupOuRessuscitarExclusao(t *testing.T) {
 	if err != nil || !bytes.Equal(atual, nova) {
 		t.Fatal("não buscou versão remota", err)
 	}
+	if err := ConfirmarCarga(ctx, store, atual); err != nil {
+		t.Fatal(err)
+	}
 	backups, _ := filepath.Glob(local.Path() + ".backup-*.enc")
 	if len(backups) != 1 {
 		t.Fatal("não preservou backup", backups)

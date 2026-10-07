@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   tests:
@@ -28,6 +28,7 @@ jobs:
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
   build:
     name: Build Binaries
+    needs: tests
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -52,6 +53,13 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
         run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+          version = re.search(r'const CurrentVersion = "([0-9]+\.[0-9]+\.[0-9]+)"', pathlib.Path('pkg/updater/updater.go').read_text()).group(1)
+          ref = os.environ['GITHUB_REF']
+          if ref.startswith('refs/tags/') and ref != 'refs/tags/v' + version:
+              raise SystemExit('A tag difere da versão compilada; build recusado.')
+          PY
           BINARY_NAME="kofre-${{ matrix.goos }}-${{ matrix.goarch }}"
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BINARY_NAME="${BINARY_NAME}.exe"
@@ -65,54 +73,6 @@ jobs:
           name: kofre-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
 
-  release:
-    name: Publish GitHub Release
-    needs: [tests, build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
 
-      - name: Download all built binaries
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Generate Checksums
-        run: |
-          cd dist
-          sha256sum * > checksums.txt
-          cat checksums.txt
-
-      - name: Determine Release Tag
-        id: vars
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-            echo "prerelease=false" >> $GITHUB_OUTPUT
-          else
-            echo "tag=latest" >> $GITHUB_OUTPUT
-            echo "prerelease=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create or Update Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.vars.outputs.tag }}
-          name: Kofre ${{ steps.vars.outputs.tag }}
-          body: |
-            ### 🔐 Kofre — Binários Oficiais Pré-compilados
-
-            Baixe o binário compatível com o seu sistema operacional:
-            - **Windows (x64):** `kofre-windows-amd64.exe`
-            - **Linux (x64):** `kofre-linux-amd64`
-            - **Linux (ARM64):** `kofre-linux-arm64`
-            - **macOS (Intel):** `kofre-darwin-amd64`
-            - **macOS (Apple Silicon M1/M2/M3):** `kofre-darwin-arm64`
-
-            Para verificar a integridade dos arquivos, consulte o `checksums.txt`.
-          files: |
-            dist/*
-          prerelease: false
-          draft: false
+  # A publicação exige assinatura local pelo release-sign antes do publisher.
+  # O CI não recebe chave privada e entrega apenas artifacts para conferência.

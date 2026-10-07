@@ -50,6 +50,12 @@ func DeriveKeyBytes(password, salt []byte) ([]byte, []byte, error) {
 // Encrypt encripta dados com AES-256-GCM.
 // Formato do payload retornado: [12 bytes Nonce][Ciphertext + 16 bytes Auth Tag]
 func Encrypt(plaintext, key []byte) ([]byte, error) {
+	return EncryptWithAAD(plaintext, key, nil)
+}
+
+// EncryptWithAAD autentica também o contexto público (versão, cofre e item).
+// O contexto não é cifrado e precisa ser idêntico na abertura.
+func EncryptWithAAD(plaintext, key, context []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao inicializar cifra AES: %w", err)
@@ -65,12 +71,16 @@ func Encrypt(plaintext, key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("falha ao gerar nonce: %w", err)
 	}
 
-	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, context)
 	return ciphertext, nil
 }
 
 // Decrypt descriptografa dados protegidos com AES-256-GCM.
 func Decrypt(payload, key []byte) ([]byte, error) {
+	return DecryptWithAAD(payload, key, nil)
+}
+
+func DecryptWithAAD(payload, key, context []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao inicializar cifra AES: %w", err)
@@ -87,7 +97,7 @@ func Decrypt(payload, key []byte) ([]byte, error) {
 	}
 
 	nonce, ciphertext := payload[:nonceSize], payload[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, context)
 	if err != nil {
 		return nil, ErrDecryptionFailed
 	}
@@ -112,4 +122,3 @@ func WipeString(s string) {
 	}
 	runtime.KeepAlive(b)
 }
-

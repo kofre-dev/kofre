@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"kofre/pkg/acesso"
 	"kofre/pkg/compra"
 	"kofre/pkg/config"
 	mycrypto "kofre/pkg/crypto"
@@ -31,6 +32,7 @@ type ViewState int
 // Substituídos apenas nos testes de ciclo da área de transferência.
 var readClipboard = clipboard.ReadAll
 var writeClipboard = clipboard.WriteAll
+var errLimpezaClipboard = errors.New("não foi possível limpar a área de transferência; o conteúdo pode continuar disponível")
 
 const (
 	ViewUnlock ViewState = iota
@@ -61,7 +63,8 @@ type Model struct {
 	salt       []byte
 
 	// Inputs da tela de Unlock
-	passInput input
+	passInput  input
+	tentativas *acesso.Tentativas
 
 	// Desafio Telegram com Timeout
 	challengeID        string
@@ -81,13 +84,15 @@ type Model struct {
 	selectedCatIdx int // 0 = Todas, 1 = Senhas, 2 = Tokens, etc.
 
 	// Tela de Detalhes
-	selectedEntry  vault.SecretEntry
-	detailCursor   int
-	revealed       bool
-	revealUntil    time.Time
-	lastActivity   time.Time
-	clipboardHash  [32]byte
-	clipboardOwned bool
+	selectedEntry    vault.SecretEntry
+	detailCursor     int
+	revealed         bool
+	revealUntil      time.Time
+	lastActivity     time.Time
+	clipboardHash    [32]byte
+	clipboardOwned   bool
+	clipboardRetries int
+	clipboardRetryAt time.Time
 
 	// Tela de Formulario (Criar / Editar)
 	isEditing      bool
@@ -139,6 +144,11 @@ func NewModel(store storage.StorageProvider) Model {
 		searchInput:   si,
 		searchFocused: false,
 	}
+	caminho := ""
+	if local, ok := store.(interface{ Path() string }); ok {
+		caminho = local.Path()
+	}
+	m.tentativas = acesso.Novas(caminho)
 	if cfg, err := config.LoadConfig(); err == nil {
 		m.temaID = cfg.Tema
 	}
@@ -207,7 +217,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case tea.MouseButtonWheelDown:
-				if m.detailCursor < len(m.selectedEntry.Fields)-1 {
+				if m.detailCursor < m.totalCamposDetalhe()-1 {
 					m.detailCursor++
 				}
 				return m, nil
@@ -320,10 +330,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.notify("Cofre aberto. Telegram não configurado: " + msg.err.Error())
 	case ephemeralRevealDoneMsg:
 		m.revealed = false
+		if msg.err != nil {
+			m.err = fmt.Errorf("não foi possível concluir a visualização: %w", msg.err)
+		}
 		return m, nil
 	case clearNotifMsg:
 		m.notification = ""
 	case securityTickMsg:
+		if m.clipboardOwned && m.clipboardRetries > 0 && m.clipboardRetries < 3 && !time.Now().Before(m.clipboardRetryAt) {
+			m.clearClipboard()
+		}
 		if m.revealed && time.Now().After(m.revealUntil) {
 			m.revealed = false
 		}
@@ -359,23 +375,39 @@ func securityTick() tea.Cmd {
 }
 
 func (m *Model) clearClipboard() {
-	if !m.clipboardOwned {
+	if !m.clipboardOwned || m.clipboardRetries >= 3 {
 		return
 	}
-	if value, err := readClipboard(); err == nil && sha256.Sum256([]byte(value)) == m.clipboardHash {
-		_ = writeClipboard("")
+	value, err := readClipboard()
+	if err == nil && sha256.Sum256([]byte(value)) == m.clipboardHash {
+		err = writeClipboard("")
+	}
+	if err != nil {
+		m.clipboardRetries++
+		m.clipboardRetryAt = time.Now().Add(time.Second)
+		m.err = errLimpezaClipboard
+		return
 	}
 	m.clipboardOwned = false
 	m.clipboardHash = [32]byte{}
+	m.clipboardRetries = 0
+	if errors.Is(m.err, errLimpezaClipboard) {
+		m.err = nil
+	}
 }
 
 func (m *Model) copyField(field vault.Field) tea.Cmd {
-	err := field.WithValue(func(value []byte) error {
+	return m.copyValue(field.WithValue)
+}
+
+func (m *Model) copyValue(withValue func(func([]byte) error) error) tea.Cmd {
+	err := withValue(func(value []byte) error {
 		if err := writeClipboard(string(value)); err != nil {
 			return err
 		}
 		m.clipboardHash = sha256.Sum256(value)
 		m.clipboardOwned = true
+		m.clipboardRetries = 0
 		return nil
 	})
 	if err != nil {
@@ -443,6 +475,13 @@ func (m *Model) notify(msg string) tea.Cmd {
 func (m *Model) cleanup() {
 	m.encerrarEsperaCompra()
 	m.lock()
+	for m.clipboardOwned && m.clipboardRetries > 0 && m.clipboardRetries < 3 {
+		time.Sleep(50 * time.Millisecond)
+		m.clearClipboard()
+	}
+	if m.clipboardOwned {
+		fmt.Fprintln(os.Stderr, "Não foi possível limpar a área de transferência. Limpe-a manualmente antes de encerrar a sessão.")
+	}
 	if syncer, ok := m.storage.(interface{ Flush(time.Duration) error }); ok {
 		if err := syncer.Flush(3 * time.Second); err != nil {
 			fmt.Fprintln(os.Stderr, "Sincronização pendente:", err)
@@ -471,6 +510,10 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		ctx := context.Background()
 		if m.isNewVault {
+			if err := validarNovaSenhaMestra(secret); err != nil {
+				m.err = err
+				return m, nil
+			}
 			// Criando cofre inicial
 			key, salt, err := mycrypto.DeriveKeyBytes(secret, nil)
 			if err != nil {
@@ -507,6 +550,15 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Carregando cofre existente
+		if m.tentativas == nil {
+			m.tentativas = acesso.Novas("")
+		}
+		tentativa, err := m.tentativas.Iniciar(time.Now())
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		defer tentativa.Fechar()
 		rawData, err := m.storage.Load(ctx)
 		if err != nil {
 			m.err = fmt.Errorf("falha ao ler cofre: %w", err)
@@ -529,6 +581,16 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		defer mycrypto.ZeroBytes(key)
 		if err != nil {
 			m.err = fmt.Errorf("chave/PIN incorreto")
+			return m, nil
+		}
+		if err = storage.ConfirmarCarga(ctx, m.storage, rawData); err != nil {
+			v.Close()
+			m.err = fmt.Errorf("cofre autenticado, mas não foi possível confirmar a cópia: %w", err)
+			return m, nil
+		}
+		if err = tentativa.Sucesso(); err != nil {
+			v.Close()
+			m.err = err
 			return m, nil
 		}
 
@@ -757,6 +819,12 @@ func (m Model) finishTelegramUnlock(unlockSecret string) (tea.Model, tea.Cmd) {
 				if err == nil {
 					v, err := vault.DecryptAndLoad(encryptedPayload, vaultKey, salt)
 					if err == nil {
+						if err = storage.ConfirmarCarga(ctx, m.storage, rawData); err != nil {
+							v.Close()
+							m.state = ViewUnlock
+							m.err = err
+							return m, nil
+						}
 						sealed, sealErr := mycrypto.SealMemory(vaultKey)
 						if sealErr != nil {
 							v.Close()
@@ -1086,6 +1154,9 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "v", " ":
+		if m.notasSelecionadas() {
+			return m, m.revealNotesEphemeral(m.selectedEntry)
+		}
 		if len(m.selectedEntry.Fields) > 0 && m.detailCursor < len(m.selectedEntry.Fields) {
 			field := m.selectedEntry.Fields[m.detailCursor]
 			if field.Protected {
@@ -1101,13 +1172,17 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "down", "j":
-		totalFields := len(m.selectedEntry.Fields)
+		totalFields := m.totalCamposDetalhe()
 		if m.detailCursor < totalFields-1 {
 			m.detailCursor++
 		}
 		return m, nil
 
 	case "enter", "c":
+		if m.notasSelecionadas() {
+			cmd := m.copyValue(m.selectedEntry.WithNotes)
+			return m, cmd
+		}
 		if len(m.selectedEntry.Fields) > 0 && m.detailCursor < len(m.selectedEntry.Fields) {
 			field := m.selectedEntry.Fields[m.detailCursor]
 			cmd := m.copyField(field)
@@ -1129,6 +1204,18 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) totalCamposDetalhe() int {
+	total := len(m.selectedEntry.Fields)
+	if m.selectedEntry.HasNotes() {
+		total++
+	}
+	return total
+}
+
+func (m Model) notasSelecionadas() bool {
+	return m.selectedEntry.HasNotes() && m.detailCursor == len(m.selectedEntry.Fields)
 }
 
 // ======================== TELA FORMULARIO (ADD/EDIT) ========================
@@ -1185,10 +1272,12 @@ func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
 		m.formInputs[3].Placeholder = "Deixe vazio para manter o segredo atual"
 	}
 
-	m.formInputs[4] = newInput(false)
+	m.formInputs[4] = newInput(true)
 	m.formInputs[4].Placeholder = "Detalhes, URLs, portas ou lembretes"
 	m.formInputs[4].Prompt = "Notas: "
-	m.formInputs[4].SetValue(entry.Notes)
+	if err := entry.WithNotes(func(value []byte) error { m.formInputs[4].SetBytes(value); return nil }); err != nil {
+		m.err = err
+	}
 }
 
 func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1278,7 +1367,9 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 		}
 		defer secretField.Close()
 	}
-	notesVal := strings.TrimSpace(m.formInputs[4].Value())
+	notesBuffer := m.formInputs[4].Bytes()
+	defer mycrypto.ZeroBytes(notesBuffer)
+	notesVal := bytes.TrimSpace(notesBuffer)
 
 	fields := make([]vault.Field, 0)
 	if userVal != "" {
@@ -1294,7 +1385,12 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 			m.err = err
 			return m, nil
 		}
-		entry.Title, entry.Category, entry.Notes = title, cat, notesVal
+		entry.Title, entry.Category = title, cat
+		if err := entry.SetNotes(notesVal); err != nil {
+			m.err = err
+			return m, nil
+		}
+		defer entry.CloseNotes()
 		userUpdated, secretUpdated := false, false
 		for i := range entry.Fields {
 			f := &entry.Fields[i]
@@ -1326,8 +1422,12 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 			Title:    title,
 			Category: cat,
 			Fields:   fields,
-			Notes:    notesVal,
 		}
+		if err := newEntry.SetNotes(notesVal); err != nil {
+			m.err = err
+			return m, nil
+		}
+		defer newEntry.CloseNotes()
 		entry, err := m.vault.AddEntry(newEntry)
 		if err != nil {
 			m.err = err
@@ -1699,12 +1799,16 @@ func (m Model) viewDetail() string {
 		}
 	}
 
-	if entry.Notes != "" {
-		b.WriteString("\n" + lipgloss.NewStyle().Underline(true).Render("Notas:") + "\n")
-		b.WriteString("  " + entry.Notes + "\n")
+	if entry.HasNotes() {
+		linha := "  Notas          : ••••••••••••••••"
+		if m.notasSelecionadas() {
+			b.WriteString(m.estilos().selectedItemStyle.Render("▶"+linha[1:]) + "\n")
+		} else {
+			b.WriteString(linha + "\n")
+		}
 	}
 
-	b.WriteString(m.estilos().helpStyle.Render("\n[↑/↓] Selecionar Campo • [Enter/c] Copiar Campo • [v] Revelar/Ocultar • [e] Editar • [Esc] Voltar"))
+	b.WriteString(m.estilos().helpStyle.Render("\n[↑/↓] Selecionar Campo • [Enter/c] Copiar Campo • [v] Revelar por 10s • [e] Editar • [Esc] Voltar"))
 
 	return m.estilos().boxStyle.Render(b.String())
 }
@@ -1750,7 +1854,7 @@ func (m Model) viewPro() string {
 
 func (m *Model) initChangePasswordForm() {
 	p1 := newInput(true)
-	p1.Placeholder = "Digite a nova senha mestre (mínimo 6 caracteres)"
+	p1.Placeholder = "6+ caracteres, com letra, símbolo ou espaço interno"
 	p1.EchoMode = textinput.EchoPassword
 	p1.EchoCharacter = '•'
 	p1.Focus()
@@ -1811,17 +1915,20 @@ func (m Model) updateChangePassword(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		defer mycrypto.ZeroBytes(p1)
 		defer mycrypto.ZeroBytes(p2)
 
-		if len(p1) < 6 {
-			m.err = fmt.Errorf("a nova senha deve ter no mínimo 6 caracteres")
+		// Segue a mesma normalização usada na abertura do cofre.
+		novaSenha := bytes.TrimSpace(p1)
+		confirmacao := bytes.TrimSpace(p2)
+		if err := validarNovaSenhaMestra(novaSenha); err != nil {
+			m.err = err
 			return m, nil
 		}
 
-		if string(p1) != string(p2) {
+		if !bytes.Equal(novaSenha, confirmacao) {
 			m.err = fmt.Errorf("as senhas digitadas não coincidem")
 			return m, nil
 		}
 
-		if err := m.changePassword(p1); err != nil {
+		if err := m.changePassword(novaSenha); err != nil {
 			m.err = err
 			return m, nil
 		}
@@ -1846,8 +1953,9 @@ func (m Model) updateChangePassword(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) changePassword(newPass []byte) error {
-	if len(newPass) == 0 {
-		return errors.New("a nova senha não pode ser vazia")
+	newPass = bytes.TrimSpace(newPass)
+	if err := validarNovaSenhaMestra(newPass); err != nil {
+		return err
 	}
 
 	newKey, newSalt, err := mycrypto.DeriveKeyBytes(newPass, nil)
@@ -1868,6 +1976,11 @@ func (m *Model) changePassword(newPass []byte) error {
 		}
 	}()
 
+	// Revoga também a chave de dados para versões futuras. Apenas reenvolver a
+	// mesma DEK permitiria reutilizá-la após extração de um backup antigo.
+	if err := m.vault.RotacionarChaveDados(); err != nil {
+		return fmt.Errorf("falha ao renovar a chave interna: %w", err)
+	}
 	// Re-criptografa o cofre com a nova chave e novo salt
 	packed, err := m.vault.Pack(newKey, newSalt)
 	if err != nil {

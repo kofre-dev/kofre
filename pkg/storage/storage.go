@@ -24,3 +24,15 @@ type StorageProvider interface {
 	// Location retorna uma descricao legivel da localizacao (ex: "local: ./vault.enc" ou "s3://meu-bucket/vault.enc")
 	Location() string
 }
+
+// ConfirmarCarga deve ser chamado após validar formato e autenticação
+// criptográfica dos bytes retornados por Load. Provedores locais não promovem
+// candidatos; SyncStorage só substitui o arquivo nesta confirmação explícita.
+func ConfirmarCarga(ctx context.Context, provider StorageProvider, data []byte) error {
+	if confirmavel, ok := provider.(interface {
+		ConfirmarCarga(context.Context, []byte) error
+	}); ok {
+		return confirmavel.ConfirmarCarga(ctx, data)
+	}
+	return nil
+}

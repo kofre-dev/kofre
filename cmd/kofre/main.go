@@ -34,8 +34,8 @@ func printHelp() {
 	fmt.Printf("Kofre 🔐 — Cofre Criptografado Portátil e Zero-Knowledge v%s (https://kofre.dev)\n\n", updater.CurrentVersion)
 	fmt.Println(`Comandos Principais:
   kofre                   Abre o cofre na interface visual interativa (TUI)
-  kofre exec <cmd...>     Injeta segredos na memória e executa o comando filho
-  kofre shell             Abre um subshell interativo temporário com segredos
+  kofre exec --help       Executa comando com credencial e campos selecionados
+  kofre shell --help      Abre shell com credencial e campos selecionados
   kofre install           Instala no seu sistema e adiciona ao PATH do terminal
   kofre uninstall         Desinstala o aplicativo, preservando o vault (ou --uninstall)
   kofre config            Assistente interativo de configuração (S3, Cloud, Telegram)
@@ -335,6 +335,22 @@ func handlePull() {
 		fmt.Fprintf(os.Stderr, "Erro: Armazenamento em nuvem não configurado. Execute 'kofre config' ou 'kofre login' primeiro.\n")
 		os.Exit(1)
 	}
+	vaultPath := resolveVaultPath("")
+	localStore, err := storage.NewLocalStorage(vaultPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Erro local: %v\n", err)
+		os.Exit(1)
+	}
+	if _, err := os.Stat(vaultPath + ".sync-pending.json"); err == nil || !os.IsNotExist(err) {
+		fmt.Fprintln(os.Stderr, "Há sincronização local pendente ou não foi possível conferir a pendência; conclua o envio antes de baixar outra cópia.")
+		os.Exit(1)
+	}
+	anterior, err := localStore.Load(context.Background())
+	tinhaLocal := err == nil
+	if err != nil && err != storage.ErrNotFound {
+		fmt.Fprintln(os.Stderr, "Não foi possível preservar o cofre local:", err)
+		os.Exit(1)
+	}
 
 	ctx := context.Background()
 	fmt.Printf("Baixando cofre da nuvem (%s)...\n", s3Store.Location())
@@ -344,19 +360,15 @@ func handlePull() {
 		os.Exit(1)
 	}
 
-	if _, _, err := vault.UnpackHeader(data); err != nil {
-		fmt.Fprintf(os.Stderr, "Erro: arquivo na nuvem não é um cofre Kofre válido: %v\n", err)
-		os.Exit(1)
-	}
-
-	vaultPath := resolveVaultPath("")
-	localStore, err := storage.NewLocalStorage(vaultPath)
+	aberto, chave, _, err := runner.UnlockVaultData(data, vaultPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Erro local: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Erro: conteúdo remoto não foi autenticado; cofre local preservado: %v\n", err)
 		os.Exit(1)
 	}
+	aberto.Close()
+	mycrypto.ZeroBytes(chave)
 
-	backup, err := localStore.SaveComBackup(ctx, data)
+	backup, err := localStore.SubstituirSeIgual(ctx, anterior, tinhaLocal, data)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Erro ao gravar arquivo baixado: %v\n", err)
 		os.Exit(1)
@@ -645,75 +657,47 @@ func resolveCloudOrS3Storage(cfg *config.AppConfig) (storage.StorageProvider, er
 
 func handleExec(args []string) {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
-		fmt.Println(`Uso: Kofre exec [--only <filtro>] [--vault <caminho>] -- <comando> [argumentos...]
+		fmt.Println(`Uso: Kofre exec --entry <ID ou título exato> --fields <campo,campo> [--vault <caminho>] -- <comando> [argumentos...]
 
 Exemplos:
-  Kofre exec python main.py
-  Kofre exec npm run dev
-  Kofre exec --only "AWS" -- aws s3 ls`)
+  Kofre exec --entry "API produção" --fields API_TOKEN -- npm run dev
+  Kofre exec --entry "AWS" --fields AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY -- aws s3 ls
+
+Somente os campos explicitamente selecionados são injetados. O nome da variável
+é o nome do campo normalizado para MAIUSCULAS_COM_SUBLINHADOS.
+--only é um alias de --entry: não aceita mais busca parcial.`)
 		return
 	}
 
-	filterEntry := ""
-	customVault := ""
-	var cmdArgs []string
-
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--only" && i+1 < len(args) {
-			filterEntry = args[i+1]
-			i++
-		} else if arg == "--vault" && i+1 < len(args) {
-			customVault = args[i+1]
-			i++
-		} else if arg == "--" {
-			cmdArgs = args[i+1:]
-			break
-		} else if !stringsHasPrefix(arg, "-") {
-			cmdArgs = args[i:]
-			break
-		}
+	opcoes, err := lerOpcoesRunner(args, false)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Erro:", err)
+		os.Exit(1)
 	}
-
-	vaultPath := resolveVaultPath(customVault)
-	code := runner.RunExec(cmdArgs, filterEntry, vaultPath)
+	vaultPath := resolveVaultPath(opcoes.vault)
+	code := runner.RunExec(opcoes.comando, opcoes.entrada, vaultPath, opcoes.campos...)
 	os.Exit(code)
 }
 
 func handleShell(args []string) {
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
-		fmt.Println(`Uso: Kofre shell [--ttl <tempo>] [--only <filtro>] [--vault <caminho>]
+		fmt.Println(`Uso: Kofre shell --entry <ID ou título exato> --fields <campo,campo> [--ttl <tempo>] [--vault <caminho>]
 
 Opções:
-  --ttl <duracao>   Tempo de vida da sessão antes de auto-destruir (ex: 15m, 1h, 30s)
-  --only <filtro>   Injeta apenas variáveis de credenciais que correspondam ao filtro
+  --entry <ID/título> Credencial única; correspondência exata, sem filtro parcial
+  --fields <lista> Campos exatos separados por vírgula; seleção obrigatória
+  --ttl <duracao>   Encerra este shell após o prazo (ex: 15m, 1h, 30s)
   --vault <caminho> Arquivo de cofre alternativo`)
 		return
 	}
 
-	var ttl time.Duration
-	filterEntry := ""
-	customVault := ""
-
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--ttl" && i+1 < len(args) {
-			d, err := time.ParseDuration(args[i+1])
-			if err == nil {
-				ttl = d
-			}
-			i++
-		} else if arg == "--only" && i+1 < len(args) {
-			filterEntry = args[i+1]
-			i++
-		} else if arg == "--vault" && i+1 < len(args) {
-			customVault = args[i+1]
-			i++
-		}
+	opcoes, err := lerOpcoesRunner(args, true)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Erro:", err)
+		os.Exit(1)
 	}
-
-	vaultPath := resolveVaultPath(customVault)
-	code := runner.RunShell(ttl, filterEntry, vaultPath)
+	vaultPath := resolveVaultPath(opcoes.vault)
+	code := runner.RunShell(opcoes.ttl, opcoes.entrada, vaultPath, opcoes.campos...)
 	os.Exit(code)
 }
 

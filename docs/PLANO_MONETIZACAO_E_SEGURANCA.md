@@ -17,7 +17,7 @@ O Kofre não concorre com gerenciadores de senha convencionais (como Bitwarden, 
   Elimina o risco de vazamento de credenciais via arquivos `.env` commitados por engano no Git, sem a complexidade pesada de ferramentas corporativas (Doppler, HashiCorp Vault) e sem a lentidão do CLI de gerenciadores tradicionais.
 * **Diferenciais Competitivos:**
   1. **Sub-20ms Startup:** Binário nativo em Go de arquivo único, sem dependência de Node.js, Python ou JVM.
-  2. **In-Memory Injection:** Injeção direta de variáveis de ambiente no processo filho (`kofre exec -- python main.py`) ou subshell efêmero (`kofre shell --ttl 30m`), com limpeza de memória (`ZeroBytes`).
+  2. **Injeção de campos selecionados:** Variáveis de ambiente no processo filho (`kofre exec --entry API --fields API_TOKEN -- python main.py`) ou shell (`kofre shell --entry API --fields API_TOKEN --ttl 30m`). O filho recebe somente os campos declarados; ele e seus descendentes podem copiar ou persistir esses valores. O prazo encerra apenas o shell iniciado.
   3. **Guardião Telegram:** Autorização em tempo real no celular com timeout estrito de 3 minutos e comando remoto `/panic`.
   4. **Armazenamento Híbrido:** Modo Cloud nativo ou S3/R2 próprio do usuário (*Bring Your Own Storage*).
 

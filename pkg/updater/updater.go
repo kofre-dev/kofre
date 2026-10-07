@@ -2,37 +2,29 @@ package updater
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
 	"kofre/pkg/config"
+	"kofre/pkg/releasesign"
 )
 
 // CurrentVersion define a versão atual compilada do binário do Kofre
-const CurrentVersion = "1.0.19"
+const CurrentVersion = "1.0.20"
 
 // PlatformRelease armazena os metadados do binário para um sistema operacional e arquitetura
-type PlatformRelease struct {
-	Version string `json:"version"`
-	URL     string `json:"url"`
-	SHA256  string `json:"sha256"`
-	Size    int64  `json:"size"`
-}
+type PlatformRelease = releasesign.PlatformRelease
 
 // ReleaseMetadata define as informações da versão mais recente publicada
-type ReleaseMetadata struct {
-	Version     string                     `json:"version"`
-	ReleaseDate string                     `json:"release_date"`
-	Notes       string                     `json:"notes"`
-	Platforms   map[string]PlatformRelease `json:"platforms"`
-}
+type ReleaseMetadata = releasesign.Metadata
 
 // CurrentPlatform retorna o identificador no formato os-arch (ex: windows-amd64)
 func CurrentPlatform() string {
@@ -41,6 +33,10 @@ func CurrentPlatform() string {
 
 // CheckForUpdate consulta a API do Kofre para verificar se há versão mais recente
 func CheckForUpdate(endpoint string) (*ReleaseMetadata, bool, error) {
+	return checkForUpdate(endpoint, CurrentPlatform(), CurrentVersion, time.Now(), releasesign.TrustedKeys())
+}
+
+func checkForUpdate(endpoint, platform, current string, now time.Time, keys map[string]ed25519.PublicKey) (*ReleaseMetadata, bool, error) {
 	if endpoint == "" {
 		endpoint = config.GetCloudEndpoint()
 	}
@@ -69,13 +65,36 @@ func CheckForUpdate(endpoint string) (*ReleaseMetadata, bool, error) {
 		return nil, false, fmt.Errorf("status inesperado da API: %d", resp.StatusCode)
 	}
 
-	var meta ReleaseMetadata
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+	data, err := io.ReadAll(io.LimitReader(resp.Body, releasesign.MaxMetadataBytes+1))
+	if err != nil {
 		return nil, false, err
 	}
-
-	hasNew := IsNewerVersion(meta.Version, CurrentVersion)
-	return &meta, hasNew, nil
+	if len(data) > releasesign.MaxMetadataBytes {
+		return nil, false, fmt.Errorf("metadados de atualização excessivos")
+	}
+	var meta ReleaseMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, false, err
+	}
+	p, ok := meta.Platforms[platform]
+	if !ok {
+		return nil, false, fmt.Errorf("release assinada indisponível para esta plataforma")
+	}
+	if err := releasesign.Verify(p, platform, now, keys); err != nil {
+		return nil, false, err
+	}
+	comparison, err := releasesign.CompareVersions(p.Version, current)
+	if err != nil {
+		return nil, false, err
+	}
+	if comparison < 0 {
+		return nil, false, fmt.Errorf("release anterior à versão instalada foi recusada")
+	}
+	// Campos globais antigos não são autenticados. Somente o descriptor assinado
+	// da plataforma atual decide versão, notas e o binário a instalar.
+	meta.Version, meta.Notes, meta.ReleaseDate = p.Version, p.Notes, p.ReleasedAt
+	meta.Platforms = map[string]PlatformRelease{platform: p}
+	return &meta, comparison > 0, nil
 }
 
 // IsNewerVersion compara semanticamente duas versões (ex: 1.0.1 > 1.0.0)
@@ -83,22 +102,8 @@ func IsNewerVersion(remote, local string) bool {
 	remote = strings.TrimPrefix(strings.TrimSpace(remote), "v")
 	local = strings.TrimPrefix(strings.TrimSpace(local), "v")
 
-	rParts := strings.Split(remote, ".")
-	lParts := strings.Split(local, ".")
-
-	for i := 0; i < len(rParts) && i < len(lParts); i++ {
-		rNum, errR := strconv.Atoi(rParts[i])
-		lNum, errL := strconv.Atoi(lParts[i])
-		if errR == nil && errL == nil {
-			if rNum > lNum {
-				return true
-			}
-			if rNum < lNum {
-				return false
-			}
-		}
-	}
-	return len(rParts) > len(lParts)
+	comparison, err := releasesign.CompareVersions(remote, local)
+	return err == nil && comparison > 0
 }
 
 // AutoUpdate verifica e aplica a atualização automaticamente
@@ -109,7 +114,10 @@ func AutoUpdate(endpoint string, silent bool) (bool, error) {
 	meta, hasNew, err := CheckForUpdate(endpoint)
 	if err != nil {
 		// Se offline ou timeout, não bloqueia o uso normal do Kofre
-		return false, nil
+		if silent {
+			return false, nil
+		}
+		return false, fmt.Errorf("não foi possível verificar uma atualização autenticada: %w", err)
 	}
 
 	if !hasNew {

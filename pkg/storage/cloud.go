@@ -96,11 +96,9 @@ func (c *KofreCloudStorage) carregar(ctx context.Context, preservarBase bool) ([
 		if revisao != revisaoArquivoCloud(data) {
 			return nil, fmt.Errorf("revisão não corresponde ao arquivo recebido")
 		}
-		if c.arquivoRevisao != "" {
-			c.ultimaLeituraRevisao = revisao
-		} else if err := c.guardarRevisao(revisao); err != nil {
-			return nil, err
-		}
+		// Nem mesmo uma leitura sem arquivo de revisão deve aprovar conteúdo
+		// remoto antes da validação criptográfica feita pelo chamador.
+		c.ultimaLeituraRevisao = revisao
 	}
 	return data, nil
 }
@@ -150,6 +148,15 @@ func (c *KofreCloudStorage) Save(ctx context.Context, data []byte) error {
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if resp.StatusCode == http.StatusConflict {
+			// O PUT anterior pode ter sido aplicado e somente seu ACK local
+			// falhado. Uma leitura de inspeção não adota outra base; só bytes
+			// exatamente iguais aos enviados permitem concluir esse ACK.
+			atual, leituraErr := c.carregar(ctx, false)
+			if leituraErr == nil && bytes.Equal(atual, data) {
+				return c.guardarRevisao(revisaoArquivoCloud(data))
+			}
+		}
 		if resp.StatusCode == 409 || resp.StatusCode == 428 {
 			return fmt.Errorf("%w: %s", ErrConflito, body)
 		}

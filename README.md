@@ -54,12 +54,19 @@ kofre
 
 ### 2. Injeção de Segredos em Memória (Sem arquivos `.env`)
 ```bash
-# Executa um comando injetando os segredos como variáveis de ambiente
-kofre exec -- npm run build
+# Injeta somente API_TOKEN da credencial com título exato "API produção"
+kofre exec --entry "API produção" --fields API_TOKEN -- npm run build
 
 # Abre um subterminal temporário com as credenciais carregadas na RAM
-kofre shell
+kofre shell --entry "AWS" --fields AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY --ttl 15m
 ```
+
+A seleção da credencial e dos campos é obrigatória. Use o ID quando houver
+títulos repetidos; `--only` permanece como alias de `--entry`, com correspondência
+exata. Os nomes dos campos viram variáveis em maiúsculas e sublinhados. Notas,
+anexos e outros campos não são incluídos. `KOFRE_PIN` e `MYCOFRE_PIN` nunca são
+repassadas ao filho. O programa iniciado e seus descendentes podem ler, copiar
+ou persistir os valores selecionados; o TTL encerra somente o shell iniciado.
 
 ### 3. Importador Inteligente
 Migre do seu navegador ou gerenciador anterior em segundos:

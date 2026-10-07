@@ -2,7 +2,6 @@ package vault
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,20 +13,23 @@ import (
 )
 
 var (
-	MagicHeader       = []byte("KOFRE001") // 8 bytes identificadores
-	LegacyMagicHeader = []byte("MYCOFRE1") // compatibilidade retroativa
-	ContaMagicHeader  = []byte("KOFRE002") // Impede clientes antigos de descartar a identidade ao regravar.
-	ErrBadMagic       = errors.New("arquivo de cofre invalido: cabecalho magico nao confere")
-	ErrNotFound       = errors.New("credencial nao encontrada")
+	MagicHeader         = []byte("KOFRE001") // 8 bytes identificadores
+	LegacyMagicHeader   = []byte("MYCOFRE1") // compatibilidade retroativa
+	ContaMagicHeader    = []byte("KOFRE002") // Impede clientes antigos de descartar a identidade ao regravar.
+	EnvelopeMagicHeader = []byte("KOFRE003") // Chave do cofre envolvida e detalhes cifrados individualmente.
+	ErrBadMagic         = errors.New("arquivo de cofre invalido: cabecalho magico nao confere")
+	ErrNotFound         = errors.New("credencial nao encontrada")
 )
 
 // ManagedVault gerencia o cofre em memoria com thread-safety
 type ManagedVault struct {
-	mu     sync.RWMutex
-	data   *Vault
-	salt   []byte
-	dirty  bool
-	closed bool
+	mu      sync.RWMutex
+	data    *Vault
+	salt    []byte
+	dirty   bool
+	closed  bool
+	dataKey *mycrypto.SealedBuffer
+	vaultID []byte
 }
 
 // NewManaged cria um cofre gerenciado novo
@@ -77,6 +79,8 @@ func (mv *ManagedVault) Close() {
 		mv.data.Conta = nil
 	}
 	mv.closed = true
+	mv.dataKey.Close()
+	mv.dataKey = nil
 }
 
 // Entries retorna uma copia de todas as entradas
@@ -196,9 +200,16 @@ func (mv *ManagedVault) Search(query string, category Category) []SecretEntry {
 
 		matched := false
 		if strings.Contains(strings.ToLower(e.Title), q) ||
-			strings.Contains(strings.ToLower(e.Notes), q) ||
 			strings.Contains(strings.ToLower(string(e.Category)), q) {
 			matched = true
+		}
+		if !matched && e.HasNotes() {
+			_ = e.WithNotes(func(value []byte) error {
+				lower := bytes.ToLower(value)
+				defer mycrypto.ZeroBytes(lower)
+				matched = bytes.Contains(lower, []byte(q))
+				return nil
+			})
 		}
 
 		if !matched {
@@ -240,11 +251,12 @@ func (mv *ManagedVault) MarkClean() {
 	mv.dirty = false
 }
 
-// Pack serializa e criptografa o cofre gerando o payload seguro em envelope:
-// [8 bytes Magic Header][16 bytes Salt][Payload AES-256-GCM]
+// Pack envolve a chave aleatória do cofre com a chave derivada da senha.
+// O formato KOFRE003 cifra cada item antes de construir o catálogo: nunca reúne
+// todos os detalhes em um único JSON em texto simples.
 func (mv *ManagedVault) Pack(key, salt []byte) ([]byte, error) {
-	mv.mu.RLock()
-	defer mv.mu.RUnlock()
+	mv.mu.Lock()
+	defer mv.mu.Unlock()
 
 	if mv.closed {
 		return nil, errors.New("cofre encerrado")
@@ -252,27 +264,7 @@ func (mv *ManagedVault) Pack(key, salt []byte) ([]byte, error) {
 	if len(salt) != mycrypto.SaltLength {
 		return nil, errors.New("salt invalido")
 	}
-	jsonData, err := marshalVault(mv.data)
-	if err != nil {
-		return nil, fmt.Errorf("falha ao serializar cofre: %w", err)
-	}
-	defer mycrypto.ZeroBytes(jsonData)
-
-	encrypted, err := mycrypto.Encrypt(jsonData, key)
-	if err != nil {
-		return nil, fmt.Errorf("falha ao criptografar cofre: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if mv.data.Conta != nil {
-		buf.Write(ContaMagicHeader)
-	} else {
-		buf.Write(MagicHeader)
-	}
-	buf.Write(salt)
-	buf.Write(encrypted)
-
-	return buf.Bytes(), nil
+	return mv.packEnvelope(key, salt)
 }
 
 // Unpack decodifica o cabecalho, extrai o salt e o payload encriptado
@@ -284,6 +276,13 @@ func UnpackHeader(raw []byte) (salt, encryptedPayload []byte, err error) {
 	}
 
 	magic := raw[:headerLen]
+	if bytes.Equal(magic, EnvelopeMagicHeader) {
+		if len(raw) < envelopePrefixLength+wrappedKeyLength+mycrypto.NonceLength+16 {
+			return nil, nil, errors.New("envelope de cofre truncado")
+		}
+		// Preserva o cabeçalho para autenticação do framing, incluindo o salt.
+		return raw[headerLen:minHeaderLen], raw, nil
+	}
 	if !bytes.Equal(magic, MagicHeader) && !bytes.Equal(magic, LegacyMagicHeader) && !bytes.Equal(magic, ContaMagicHeader) {
 		return nil, nil, ErrBadMagic
 	}
@@ -295,13 +294,19 @@ func UnpackHeader(raw []byte) (salt, encryptedPayload []byte, err error) {
 
 // DecryptAndLoad abre o cofre decifrando o payload com a chave informada
 func DecryptAndLoad(encryptedPayload, key, salt []byte) (*ManagedVault, error) {
+	if bytes.HasPrefix(encryptedPayload, EnvelopeMagicHeader) {
+		return loadEnvelope(encryptedPayload, key, salt)
+	}
 	plaintext, err := mycrypto.Decrypt(encryptedPayload, key)
 	if err != nil {
 		return nil, err
 	}
 	defer mycrypto.ZeroBytes(plaintext)
 
-	var v Vault
+	v, err := decodeVaultProtected(plaintext)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao desserializar conteudo do cofre: %w", err)
+	}
 	defer func() {
 		if v.Conta != nil {
 			v.Conta.Close()
@@ -310,11 +315,7 @@ func DecryptAndLoad(encryptedPayload, key, salt []byte) (*ManagedVault, error) {
 			closeEntry(&v.Entries[i])
 		}
 	}()
-	if err := json.Unmarshal(plaintext, &v); err != nil {
-		return nil, fmt.Errorf("falha ao desserializar conteudo do cofre: %w", err)
-	}
-
-	return Wrap(&v, salt)
+	return Wrap(v, salt)
 }
 
 // ToEnvMap converte as credenciais do cofre em um mapa de variaveis de ambiente
@@ -362,7 +363,9 @@ func (mv *ManagedVault) ToEnvMap(filterTitle string) (map[string]string, error) 
 
 		// Se nao tiver campos, mas tiver titulo formato ENV
 		if len(entry.Fields) == 0 && cleanTitle != "" {
-			envMap[cleanTitle] = entry.Notes
+			if err := entry.WithNotes(func(value []byte) error { envMap[cleanTitle] = string(value); return nil }); err != nil {
+				return nil, err
+			}
 		}
 	}
 

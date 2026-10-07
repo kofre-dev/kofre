@@ -38,19 +38,22 @@ type Attachment struct {
 	Filename string `json:"filename"`
 	Data     []byte `json:"data"`
 	Size     int64  `json:"size"`
+	sealed   *mycrypto.SealedBuffer
 }
 
 // SecretEntry representa uma credencial ou segredo individual
 type SecretEntry struct {
-	ID          string       `json:"id"`
-	Title       string       `json:"title"`
-	Category    Category     `json:"category"`
-	Fields      []Field      `json:"fields"`
-	Notes       string       `json:"notes"`
-	Attachments []Attachment `json:"attachments,omitempty"`
-	CreatedAt   time.Time    `json:"created_at"`
-	UpdatedAt   time.Time    `json:"updated_at"`
-	Version     int          `json:"version"` // contador de alteracoes locais
+	ID             string       `json:"id"`
+	Title          string       `json:"title"`
+	Category       Category     `json:"category"`
+	Fields         []Field      `json:"fields"`
+	Notes          string       `json:"notes"`
+	Attachments    []Attachment `json:"attachments,omitempty"`
+	CreatedAt      time.Time    `json:"created_at"`
+	UpdatedAt      time.Time    `json:"updated_at"`
+	Version        int          `json:"version"` // contador de alteracoes locais
+	notes          *mycrypto.SealedBuffer
+	notesTemporary bool
 }
 
 // Vault representa a colecao completa de segredos descriptografados em memoria

@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -66,17 +68,22 @@ func (m Model) painelAcesso() string {
 		b.WriteString(centro.Render(m.cadeadoAcesso()) + "\n\n")
 	}
 	titulo, acao := "Abra seu cofre", "Abrir cofre"
+	orientacao := "Senha mestra ou PIN"
 	if m.isNewVault {
 		titulo, acao = "Crie seu cofre", "Criar cofre"
+		orientacao = "6+ caracteres · letra, símbolo ou espaço interno"
 	}
 	b.WriteString(centro.Bold(true).Foreground(m.cores().Texto).Render(titulo))
-	b.WriteString("\n" + centro.Foreground(m.cores().Suave).Render("Senha mestra ou PIN") + "\n\n")
+	b.WriteString("\n" + centro.Foreground(m.cores().Suave).Render(orientacao) + "\n\n")
 	entrada := m.passInput
 	entrada.Prompt = "> "
 	entrada.Placeholder = "Digite sua senha"
 	campo := ansi.Truncate(entrada.View(), conteudo-4, "…")
 	b.WriteString(lipgloss.NewStyle().Width(conteudo-2).Padding(0, 1).Foreground(m.cores().Suave).Border(lipgloss.RoundedBorder()).BorderForeground(m.cores().Destaque).Render(campo))
 	b.WriteString("\n\n")
+	if segundos := m.tentativas.Restante(time.Now()); segundos > 0 {
+		acao = fmt.Sprintf("Aguarde %ds", segundos)
+	}
 	b.WriteString(centro.Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(m.cores().Botao).Render(acao + "  [Enter]  →"))
 	b.WriteString("\n\n" + lipgloss.NewStyle().Foreground(m.cores().Borda).Render(strings.Repeat("─", conteudo)) + "\n")
 	link := lipgloss.NewStyle().Foreground(m.cores().Destaque).Render(botaoAtivarPro)
