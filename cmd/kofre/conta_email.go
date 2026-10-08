@@ -16,7 +16,6 @@ import (
 	"kofre/pkg/corporativo"
 	mycrypto "kofre/pkg/crypto"
 	"kofre/pkg/storage"
-	"kofre/pkg/tui"
 	"kofre/pkg/vault"
 )
 
@@ -28,7 +27,11 @@ func cadastrarContaEmail(path string) error {
 	s := contaEmUso
 	i, err := abrirIdentidadeConta(path, nil)
 	if errors.Is(err, os.ErrNotExist) {
-		i, err = corporativo.PrepararCadastro(perguntarEmpresa("Seu nome"))
+		nome, e := solicitarEmpresa("Seu nome")
+		if e != nil {
+			return e
+		}
+		i, err = corporativo.PrepararCadastro(nome)
 		if err != nil {
 			return err
 		}
@@ -37,10 +40,14 @@ func cadastrarContaEmail(path string) error {
 	}
 	defer i.Fechar()
 	if i.ID != "" {
-		fmt.Println("Sua conta já está cadastrada. Use Entrar por e-mail para renovar o acesso.")
+		informarConta("Sua conta já está cadastrada. Use Entrar por e-mail para renovar o acesso.")
 		return nil
 	}
-	i.Email, err = conta.EmailValido(perguntarEmpresa("Seu e-mail"))
+	email, err := solicitarEmpresa("Seu e-mail")
+	if err != nil {
+		return err
+	}
+	i.Email, err = conta.EmailValido(email)
 	if err != nil {
 		return err
 	}
@@ -68,7 +75,7 @@ func cadastrarContaEmail(path string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("Confira sua caixa de entrada. A senha mestra permanece neste computador.")
+	informarConta("Confira sua caixa de entrada. A senha mestra permanece neste computador.")
 	codigo, err := codigoConta()
 	if err != nil {
 		return err
@@ -87,12 +94,24 @@ func cadastrarContaEmail(path string) error {
 	if err = s.salvar(i); err != nil {
 		return err
 	}
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.ContaConfigurada = true
+	if err = config.SaveConfig(cfg); err != nil {
+		return err
+	}
 	if err = publicarBackupConta(s, i); err != nil {
 		return fmt.Errorf("conta criada; backup remoto pendente: %w", err)
 	}
-	fmt.Println("Conta gratuita criada e e-mail confirmado. Identificação para convites:", i.ID)
-	fmt.Println("Seu cofre e sua conta usam a mesma senha mestra. A nuvem continua opcional.")
-	if perguntarEmpresa("Conectar e sincronizar este cofre agora? [s/N]") == "s" {
+	informarConta("Conta gratuita criada e e-mail confirmado.")
+	informarConta("Você continua no plano Free e usa a mesma senha mestra. Escolha a seguir se deseja sincronizar este cofre.")
+	sincronizar, err := confirmarSincronizacaoConta()
+	if err != nil {
+		return err
+	}
+	if sincronizar {
 		client, e := corporativo.NovoClient(config.GetCloudEndpoint(), i)
 		if e != nil {
 			return e
@@ -196,7 +215,11 @@ func entrarContaEmail(recuperar bool) error {
 	if err != nil {
 		return err
 	}
-	email, err := conta.EmailValido(perguntarEmpresa("Seu e-mail"))
+	valor, err := solicitarEmpresa("Seu e-mail")
+	if err != nil {
+		return err
+	}
+	email, err := conta.EmailValido(valor)
 	if err != nil {
 		return err
 	}
@@ -345,9 +368,9 @@ func entrarContaEmail(recuperar bool) error {
 	if err = config.AtivarLicencaComprada(config.GetCloudEndpoint(), i.Token); err != nil {
 		return fmt.Errorf("acesso salvo no cofre; conexão da nuvem pendente: %w", err)
 	}
-	fmt.Println("Conta conectada. A sessão deste computador tem validade de 30 dias.")
+	informarConta("Conta conectada. A sessão deste computador tem validade de 30 dias.")
 	if err = cloud.Save(context.Background(), packed); err != nil {
-		fmt.Println("Cofre local preservado. Sincronização pendente; confira os conflitos antes de enviar.")
+		informarConta("Cofre local preservado. Sincronização pendente; confira os conflitos antes de enviar.")
 	}
 	return nil
 }
@@ -379,14 +402,14 @@ func administrarSessoesConta(i *corporativo.Identidade) error {
 		}
 	}
 	if len(opcoes) == 0 {
-		fmt.Println("Nenhuma sessão por dispositivo. Entre por e-mail neste computador.")
+		informarConta("Nenhuma sessão por dispositivo. Entre por e-mail neste computador.")
 		return nil
 	}
-	n, err := tui.EscolherOpcao("Sessões · escolha para encerrar", opcoes)
+	n, err := escolherOpcaoConta("Sessões · escolha para encerrar", opcoes)
 	if err != nil || n < 0 {
 		return err
 	}
-	if perguntarEmpresa("Digite ENCERRAR para revogar o acesso desse dispositivo") != "ENCERRAR" {
+	if !confirmarEmpresa("Digite ENCERRAR para revogar o acesso desse dispositivo", "ENCERRAR") {
 		return nil
 	}
 	if err = c.Revogar(context.Background(), i.Token, sessoes[n].ID); err != nil {
@@ -395,7 +418,7 @@ func administrarSessoesConta(i *corporativo.Identidade) error {
 	if sessoes[n].Atual {
 		return encerrarContaLocal(i)
 	}
-	fmt.Println("Sessão encerrada. O cofre local desse dispositivo continua cifrado.")
+	informarConta("Sessão encerrada. O cofre local desse dispositivo continua cifrado.")
 	return nil
 }
 
@@ -420,6 +443,15 @@ func encerrarContaLocal(i *corporativo.Identidade) error {
 // Revelação explícita sem materializar uma string imutável nem aceitar escapes
 // do servidor. O terminal pode guardar sua própria cópia; apague o buffer usado.
 func escreverSegredoTerminal(data []byte) error {
+	if interfaceConta != nil {
+		protegido, err := mycrypto.SealMemory(data)
+		mycrypto.ZeroBytes(data)
+		if err != nil {
+			return err
+		}
+		defer protegido.Close()
+		return interfaceConta.Revelar("Credencial compartilhada", protegido.WithBytes)
+	}
 	return escreverSegredoPara(os.Stdout, data)
 }
 func escreverSegredoPara(dest io.Writer, data []byte) error {

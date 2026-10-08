@@ -25,3 +25,5 @@ tmp/
 dist/
 build/
 .railway/
+__pycache__/
+*.pyc

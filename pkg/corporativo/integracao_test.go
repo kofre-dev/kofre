@@ -178,5 +178,68 @@ func TestClientCloudIntegration(t *testing.T) {
 	if err = a.Request(ctx, "PUT", base+"/proprietario", map[string]string{"novo_proprietario": terceiro.Identidade.ID, "confirmacao": "TRANSFERIR"}, nil); err != nil {
 		t.Fatal(err)
 	}
+	// A mesma pessoa pode participar de duas empresas sem misturar seus itens.
+	// Reutilizar IDs de workspace e item expõe regressões na chave de isolamento.
+	outra := admin("/v1/corporativo/piloto/organizacoes", map[string]any{"nome": "Outra empresa fictícia", "plano": "corporate", "assentos": 3, "proprietario": terceiro.Identidade.ID, "validade": time.Now().Add(time.Hour).UTC().Format(time.RFC3339), "solicitacao_id": strings.Repeat("3", 32)})
+	org2 := outra["id"].(string)
+	base2 := "/v1/corporativo/organizacoes/" + org2
+	var convite2 map[string]string
+	if err = terceiro.Request(ctx, "POST", base2+"/convites", map[string]string{"destinatario": a.Identidade.ID}, &convite2); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.Request(ctx, "POST", base2+"/aceitar", map[string]string{"codigo": convite2["codigo"]}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = terceiro.Request(ctx, "PUT", base2+"/workspaces/"+workspace, Workspace{"Outro projeto"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	segredo2 := []byte(`{"senha":"somente-segunda-empresa"}`)
+	acesso2 := Acesso{Pessoas: map[string]string{terceiro.Identidade.ID: "gestor", a.Identidade.ID: "leitor"}, Equipes: map[string]string{}}
+	if err = terceiro.Gravar(ctx, org2, item, workspace, 1, acesso2, segredo2, confirmar); err != nil {
+		t.Fatal(err)
+	}
+	for _, caso := range []struct {
+		org      string
+		esperado []byte
+	}{{org, plaintext}, {org2, segredo2}} {
+		b, _, e := a.Ler(ctx, caso.org, item)
+		if e != nil || !bytes.Equal(b, caso.esperado) {
+			clear(b)
+			t.Fatal("credenciais misturadas entre organizações", e)
+		}
+		clear(b)
+	}
+	if _, _, err = d.Ler(ctx, org2, item); err == nil {
+		t.Fatal("usuário externo leu a segunda empresa")
+	}
+	if err = a.Gravar(ctx, org2, item, workspace, 2, acesso2, plaintext, confirmar); err == nil {
+		t.Fatal("leitor editou item da segunda empresa")
+	}
+	if err = a.Request(ctx, "DELETE", base2+"/segredos/"+item, nil, nil); err == nil {
+		t.Fatal("leitor excluiu item da segunda empresa")
+	}
+	if err = a.Request(ctx, "POST", base2+"/convites", map[string]string{"destinatario": d.Identidade.ID}, nil); err == nil {
+		t.Fatal("membro convidou sem administração")
+	}
+	// Uma assinatura válida em uma empresa não valida a mesma cópia em outra.
+	abertoOrg1, recebidoOrg1, err := a.Ler(ctx, org, item)
+	clear(abertoOrg1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verificarAssinatura(org2, item, a.Identidade.ID, recebidoOrg1.Workspace, recebidoOrg1.Versao, recebidoOrg1.Copia) {
+		t.Fatal("assinatura reaproveitada em outra empresa")
+	}
+	if err = terceiro.Request(ctx, "DELETE", base2+"/membros/"+a.Identidade.ID, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = a.Ler(ctx, org2, item); err == nil {
+		t.Fatal("remoção da segunda empresa manteve acesso")
+	}
+	b1, _, err := a.Ler(ctx, org, item)
+	clear(b1)
+	if err != nil {
+		t.Fatal("remoção da segunda empresa afetou a primeira", err)
+	}
 	t.Log(fmt.Sprintf("3 clientes reais; organização %s; compartilhamento, edição, recuperação e remoção validados", org))
 }

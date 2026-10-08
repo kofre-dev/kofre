@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"kofre/pkg/corporativo"
 	mycrypto "kofre/pkg/crypto"
-	"kofre/pkg/runner"
 	"kofre/pkg/storage"
 	"kofre/pkg/vault"
 	"os"
@@ -32,7 +31,7 @@ func abrirSessaoConta(identidade string) (*sessaoConta, error) {
 	if err != nil {
 		return nil, fmt.Errorf("abra ou crie seu cofre antes de configurar a conta: %w", err)
 	}
-	v, key, salt, err := runner.UnlockVaultWithKey(path)
+	v, key, salt, err := abrirCofreConta(path)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +145,7 @@ func (s *sessaoConta) salvar(i *corporativo.Identidade) error {
 	s.cofre.MarkClean()
 	if syncer, ok := store.(*storage.SyncStorage); ok {
 		if err = syncer.Flush(3 * time.Second); err != nil {
-			fmt.Println("Conta salva no cofre local; sincronização pendente.")
+			informarConta("Conta salva no cofre local; sincronização pendente.")
 		}
 	}
 	return nil
@@ -161,7 +160,7 @@ func migrarContaAnterior(path string) error {
 	} else if err != nil {
 		return err
 	}
-	fmt.Println("Vamos vincular sua conta existente à senha mestra. O arquivo anterior será preservado como backup.")
+	informarConta("Vamos vincular sua conta existente à senha mestra. O arquivo anterior será preservado como backup.")
 	senha, err := segredoEmpresa("Senha antiga da conta (somente nesta migração)")
 	if err != nil {
 		return err

@@ -23,7 +23,6 @@ import (
 	"kofre/pkg/config"
 	mycrypto "kofre/pkg/crypto"
 	"kofre/pkg/storage"
-	"kofre/pkg/updater"
 	"kofre/pkg/vault"
 )
 
@@ -327,7 +326,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			return m, m.notify("✓ Desbloqueio direto por Telegram ATIVADO! Acesso sem senha liberado.")
 		}
-		return m, m.notify("Cofre aberto. Telegram não configurado: " + msg.err.Error())
+		m.notification = ""
+		m.err = fmt.Errorf("cofre aberto, mas não foi possível configurar o Telegram: %w", msg.err)
+		return m, nil
 	case ephemeralRevealDoneMsg:
 		m.revealed = false
 		if msg.err != nil {
@@ -357,6 +358,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 type telegramEnvelopeSavedMsg struct{ err error }
+
+// Preferência local determina a tentativa; o servidor continua autorizando o recurso.
+func deveConfigurarTelegram(cfg *config.AppConfig) bool {
+	return cfg != nil && cfg.CloudEnabled && cfg.TelegramAuth && cfg.KofreToken != "" &&
+		(cfg.PlanoCloud == "pro" || cfg.PlanoCloud == "" && strings.HasPrefix(cfg.KofreToken, "kfr_pro_"))
+}
 
 func saveTelegramEnvelopeCmd(key []byte, token, endpoint string) tea.Cmd {
 	return func() tea.Msg {
@@ -615,7 +622,7 @@ func (m Model) updateUnlock(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.notification != "" {
 			unlockCmd = m.notify(m.notification)
 		}
-		if cfg, _ := config.LoadConfig(); cfg != nil && cfg.CloudEnabled && cfg.KofreToken != "" && mycrypto.TelegramEnvelopeDeviceID() == "" {
+		if cfg, _ := config.LoadConfig(); deveConfigurarTelegram(cfg) && mycrypto.TelegramEnvelopeDeviceID() == "" {
 			keyCopy := append([]byte(nil), key...)
 			unlockCmd = tea.Batch(m.notify("Cofre aberto. Registrando envelope do Telegram..."), saveTelegramEnvelopeCmd(keyCopy, cfg.KofreToken, config.GetCloudEndpoint()))
 		}
@@ -871,7 +878,7 @@ func (m Model) visibleListHeight() int {
 		return 10
 	}
 	// Reserva o espaço real do rodapé, que cresce em janelas estreitas.
-	overhead := lipgloss.Height(m.renderHeader()) + lipgloss.Height(m.categoriasLista()) + 15 + lipgloss.Height(m.listFooter())
+	overhead := lipgloss.Height(m.renderHeader()) + lipgloss.Height(m.categoriasLista()) + 16 + lipgloss.Height(m.listFooter())
 	if m.notification != "" || m.err != nil {
 		overhead += 2
 	}
@@ -1119,7 +1126,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = ViewForm
 		return m, nil
 
-	case "d":
+	case "d", "delete":
 		if len(m.filteredItems) > 0 {
 			entry := m.filteredItems[m.cursor]
 			m.deleteID = entry.ID
@@ -1195,7 +1202,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = ViewForm
 		return m, nil
 
-	case "d":
+	case "d", "delete":
 		m.revealed = false
 		m.deleteID = m.selectedEntry.ID
 		m.deleteTitle = m.selectedEntry.Title
@@ -1220,10 +1227,21 @@ func (m Model) notasSelecionadas() bool {
 
 // ======================== TELA FORMULARIO (ADD/EDIT) ========================
 
+var ordemCamposFormulario = []int{1, 0, 2, 3, 4}
+
+func proximoCampoFormulario(atual, direcao int) int {
+	for pos, indice := range ordemCamposFormulario {
+		if indice == atual {
+			return ordemCamposFormulario[(pos+direcao+len(ordemCamposFormulario))%len(ordemCamposFormulario)]
+		}
+	}
+	return 1
+}
+
 func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
 	m.clearForm()
 	m.isEditing = isEdit
-	m.formFocusIndex = 0
+	m.formFocusIndex = 1
 
 	// 0: Titulo
 	// 1: Categoria (password, token, certificate, ssh_key, auth, note)
@@ -1236,7 +1254,6 @@ func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
 	m.formInputs[0].Placeholder = "Ex: AWS Producao, Banco, GitHub PAT"
 	m.formInputs[0].Prompt = "Titulo: "
 	m.formInputs[0].SetValue(entry.Title)
-	m.formInputs[0].Focus()
 
 	m.formInputs[1] = newInput(false)
 	m.formInputs[1].Placeholder = "password, token, certificate, ssh_key, auth, note"
@@ -1246,6 +1263,7 @@ func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
 		catVal = "password"
 	}
 	m.formInputs[1].SetValue(catVal)
+	m.formInputs[1].Focus()
 
 	userVal := ""
 	passVal := ""
@@ -1263,7 +1281,7 @@ func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
 	m.formInputs[2].SetValue(userVal)
 
 	m.formInputs[3] = newInput(true)
-	m.formInputs[3].Placeholder = "•••••••• (ou aperte 'g' para gerar)"
+	m.formInputs[3].Placeholder = "Digite a senha ou use Ctrl+G para gerar"
 	m.formInputs[3].Prompt = "Segredo/Senha: "
 	m.formInputs[3].EchoMode = textinput.EchoPassword
 	m.formInputs[3].EchoCharacter = '•'
@@ -1273,6 +1291,7 @@ func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
 	}
 
 	m.formInputs[4] = newInput(true)
+	m.formInputs[4].visivel = true
 	m.formInputs[4].Placeholder = "Detalhes, URLs, portas ou lembretes"
 	m.formInputs[4].Prompt = "Notas: "
 	if err := entry.WithNotes(func(value []byte) error { m.formInputs[4].SetBytes(value); return nil }); err != nil {
@@ -1292,7 +1311,7 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyTab, tea.KeyDown:
-		m.formFocusIndex = (m.formFocusIndex + 1) % len(m.formInputs)
+		m.formFocusIndex = proximoCampoFormulario(m.formFocusIndex, 1)
 		for i := range m.formInputs {
 			if i == m.formFocusIndex {
 				m.formInputs[i].Focus()
@@ -1303,7 +1322,7 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 
 	case tea.KeyShiftTab, tea.KeyUp:
-		m.formFocusIndex = (m.formFocusIndex - 1 + len(m.formInputs)) % len(m.formInputs)
+		m.formFocusIndex = proximoCampoFormulario(m.formFocusIndex, -1)
 		for i := range m.formInputs {
 			if i == m.formFocusIndex {
 				m.formInputs[i].Focus()
@@ -1319,7 +1338,7 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.saveForm()
 		}
 		// Caso contrario avanca pro proximo campo
-		m.formFocusIndex = (m.formFocusIndex + 1) % len(m.formInputs)
+		m.formFocusIndex = proximoCampoFormulario(m.formFocusIndex, 1)
 		for i := range m.formInputs {
 			if i == m.formFocusIndex {
 				m.formInputs[i].Focus()
@@ -1604,32 +1623,7 @@ func (m Model) View() string {
 }
 
 func (m Model) renderHeader() string {
-	if m.state == ViewUnlock || m.state == ViewPro || m.state == ViewList {
-		return m.cabecalhoAcesso()
-	}
-	isUnlocked := m.state != ViewUnlock && m.state != ViewTelegramChallenge && m.state != ViewPro
-
-	lockText := "🔒 TRANCADO"
-	if isUnlocked {
-		lockText = "🔓 DESBLOQUEADO (RAM)"
-	}
-
-	title := m.estilos().titleStyle.Render(" Kofre ")
-	versionBadge := m.estilos().dimStyle.Render("v" + updater.CurrentVersion)
-	status := m.estilos().statusBadgeStyle.Render(lockText)
-
-	planBadge := m.estilos().dimStyle.Render("[FREE]")
-	if isProPlan() {
-		planBadge = badgeToken.Render("★ PRO")
-	}
-
-	header := fmt.Sprintf("%s %s  %s  %s", title, versionBadge, planBadge, status)
-	if isUnlocked && m.vault != nil {
-		countBadge := badgeSSH.Render(fmt.Sprintf("%d segredos", m.vault.Count()))
-		header = fmt.Sprintf("%s  %s", header, countBadge)
-	}
-
-	return m.estilos().headerBoxStyle.Render(header)
+	return m.cabecalhoAcesso()
 }
 
 func (m Model) viewUnlock() string {
@@ -1680,7 +1674,8 @@ func (m Model) viewTelegramChallenge() string {
 func (m Model) viewList() string {
 	var b strings.Builder
 	largura := m.larguraAcesso() - 4
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(m.cores().Texto).Render("Seus segredos") + "\n\n")
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(m.cores().Texto).Render("Seus segredos") + "\n")
+	b.WriteString(m.indicadorNuvem() + "\n\n")
 	b.WriteString(m.categoriasLista() + "\n\n")
 	busca := m.searchInput
 	busca.Prompt = "⌕  "
@@ -1759,7 +1754,19 @@ func (m Model) viewList() string {
 		b.WriteString(m.estilos().dimStyle.Render(fmt.Sprintf("  [Item %d de %d]", m.cursor+1, total)) + "\n")
 	}
 
-	b.WriteString(m.listFooter())
+	rodape := m.listFooter()
+	if m.height > 0 {
+		reserva := lipgloss.Height(m.renderHeader()) + 1
+		if m.notification != "" {
+			reserva += lipgloss.Height(m.estilos().successStyle.Render(m.notification)) + 1
+		} else if m.err != nil {
+			reserva += lipgloss.Height(m.estilos().dangerStyle.Render("Erro: "+m.err.Error())) + 1
+		}
+		alturaConteudo := max(0, m.height-reserva-4) // Bordas e espaçamento vertical do quadro.
+		vazio := max(0, alturaConteudo-lipgloss.Height(b.String()+rodape))
+		b.WriteString(strings.Repeat("\n", vazio))
+	}
+	b.WriteString(rodape)
 
 	return lipgloss.NewStyle().Width(m.larguraAcesso()).Padding(1, 2).Border(lipgloss.RoundedBorder()).BorderForeground(m.cores().Destaque).Render(b.String())
 }
@@ -1808,7 +1815,7 @@ func (m Model) viewDetail() string {
 		}
 	}
 
-	b.WriteString(m.estilos().helpStyle.Render("\n[↑/↓] Selecionar Campo • [Enter/c] Copiar Campo • [v] Revelar por 10s • [e] Editar • [Esc] Voltar"))
+	b.WriteString(m.estilos().helpStyle.Render("\n" + wrapHelp([]string{"↑↓ Selecionar Campo", "Enter/c Copiar", "v Revelar por 10s", "e Editar", "d/Del Excluir", "Esc Voltar"}, max(16, m.larguraAcesso()-8))))
 
 	return m.estilos().boxStyle.Render(b.String())
 }
@@ -1823,17 +1830,25 @@ func (m Model) viewForm() string {
 
 	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(m.cores().Destaque).Render(titleText) + "\n\n")
 
-	for i := range m.formInputs {
-		b.WriteString(m.formInputs[i].View() + "\n")
-		if i == 3 {
-			b.WriteString(m.estilos().dimStyle.Render("  (Dica: aperte Ctrl+G para gerar senha forte)") + "\n")
+	w := max(16, m.larguraAcesso()-4)
+	for _, i := range ordemCamposFormulario {
+		campo := m.formInputs[i]
+		if i != 3 && m.height < 36 {
+			b.WriteString(ansi.Truncate(campo.View(), w, "…") + "\n\n")
+			continue
 		}
-		b.WriteString("\n")
+		b.WriteString(m.estilos().dimStyle.Render(strings.TrimSuffix(campo.Prompt, ": ")) + "\n")
+		campo.Prompt = ""
+		cor := m.cores().Borda
+		if i == m.formFocusIndex {
+			cor = m.cores().Destaque
+		}
+		valor := ansi.Truncate(campo.View(), w-4, "…")
+		b.WriteString(lipgloss.NewStyle().Width(w-2).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(cor).Render(valor) + "\n")
 	}
-
-	b.WriteString(m.estilos().helpStyle.Render("[Tab/Shift+Tab] Alternar Campos • [Ctrl+G] Gerar Senha • [Ctrl+S ou Enter no fim] Salvar • [Esc] Cancelar"))
-
-	return m.estilos().boxStyle.Render(b.String())
+	b.WriteString("\n" + m.estilos().helpStyle.Render(wrapHelp([]string{"Tab/Shift+Tab Campos", "Ctrl+G Gerar senha"}, w)) + "\n")
+	b.WriteString(m.estilos().helpStyle.Render(wrapHelp([]string{"Ctrl+S Salvar", "Esc Cancelar"}, w)))
+	return lipgloss.NewStyle().Width(m.larguraAcesso()).Padding(1, 2).Border(lipgloss.RoundedBorder()).BorderForeground(m.cores().Destaque).Render(b.String())
 }
 
 func (m Model) viewConfirmDelete() string {

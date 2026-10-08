@@ -21,7 +21,6 @@ import (
 	"kofre/pkg/conta"
 	"kofre/pkg/corporativo"
 	mycrypto "kofre/pkg/crypto"
-	"kofre/pkg/runner"
 	"kofre/pkg/storage"
 )
 
@@ -47,6 +46,11 @@ func perguntarEmpresa(label string) string {
 	return strings.TrimSpace(line)
 }
 func segredoEmpresa(label string) ([]byte, error) {
+	if interfaceConta != nil {
+		texto := mensagensConta.String()
+		mensagensConta.Reset()
+		return interfaceConta.Entrada(label, strings.TrimSpace(texto), true)
+	}
 	fmt.Print(label + ": ")
 	data, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println()
@@ -60,12 +64,15 @@ func handleEmpresa(args []string) {
 	}
 }
 
+var errContaParaContratar = errors.New("para contratar o Corporativo, crie uma conta gratuita ou entre por e-mail neste PC; não é necessário assinar o Pro pessoal")
+var errContaParaEmpresas = errors.New("para acessar empresas e convites, crie uma conta gratuita ou entre por e-mail neste PC")
+
 func executarEmpresa(args []string) error {
 	if len(args) > 0 && (args[0] == "entrar" || args[0] == "recuperar-email" || args[0] == "recuperar") {
 		return entrarContaEmail(args[0] != "entrar")
 	}
 	if len(args) == 0 || args[0] == "ajuda" {
-		fmt.Println(`Kofre Empresa — seu cofre pessoal permanece independente.
+		informarConta(`Kofre Empresa — seu cofre pessoal permanece independente.
   criar-conta                         Cria sua identidade sem licença pessoal Pro
   comprar                             Contrata assentos para sua empresa no navegador
   renovar <organização>               Renova a mesma empresa, preservando os espaços
@@ -141,7 +148,7 @@ A conta fica protegida pela senha mestra do cofre. Exporte um backup para usar e
 		return salvarIdentidadeConta(path, backup, password)
 	}
 	var identidade *corporativo.Identidade
-	if args[0] == "criar-conta" {
+	if args[0] == "criar-conta" || (args[0] == "ativar-nuvem" && !sessao.cofre.TemConta()) {
 		return cadastrarContaEmail(path)
 	}
 	if args[0] == "configurar" {
@@ -167,10 +174,35 @@ A conta fica protegida pela senha mestra do cofre. Exporte um backup para usar e
 	} else {
 		identidade, err = abrirIdentidadeConta(path, password)
 		if err != nil {
+			if args[0] == "comprar" && errors.Is(err, os.ErrNotExist) {
+				return errContaParaContratar
+			}
+			if args[0] == "painel" && errors.Is(err, os.ErrNotExist) {
+				return errContaParaEmpresas
+			}
 			return err
 		}
 	}
 	defer identidade.Fechar()
+	if args[0] == "ativar-nuvem" {
+		if identidade.ID == "" {
+			return cadastrarContaEmail(path)
+		}
+		if identidade.Token == "" {
+			return errors.New("sua conta já existe; use Entrar por e-mail neste PC para renovar o acesso antes de sincronizar")
+		}
+		sincronizar, e := confirmarSincronizacaoConta()
+		if e != nil || !sincronizar {
+			return e
+		}
+		args = []string{"conectar"}
+	}
+	if args[0] == "comprar" && (identidade.ID == "" || identidade.Token == "") {
+		return errContaParaContratar
+	}
+	if args[0] == "painel" && (identidade.ID == "" || identidade.Token == "") {
+		return errContaParaEmpresas
+	}
 	if err = identidade.ProtegerPrivada(); err != nil {
 		return err
 	}
@@ -185,15 +217,19 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 	var err error
 	ctx := context.Background()
 	confirmarChave := func(id string, pessoa corporativo.Pessoa, fingerprint string) bool {
-		fmt.Printf("Identidade: %s (%s)\nFingerprint: %s\n", textoEmpresa(pessoa.Nome), id, fingerprint)
-		return perguntarEmpresa("Confirmou essa chave com a pessoa por outro canal? [s/N]") == "s"
+		informarContaFormato("Identidade: %s (%s)\nFingerprint: %s\n", textoEmpresa(pessoa.Nome), id, fingerprint)
+		return confirmarEmpresa("Confirmou essa chave com a pessoa por outro canal? [s/N]", "s")
 	}
 	client.ConfirmarAutor = confirmarChave
 	if args[0] == "sessoes" {
 		return administrarSessoesConta(identidade)
 	}
 	if args[0] == "backup-conta" {
-		return publicarBackupConta(contaEmUso, identidade)
+		if err := publicarBackupConta(contaEmUso, identidade); err != nil {
+			return err
+		}
+		informarConta("Backup protegido da conta atualizado.")
+		return nil
 	}
 	if args[0] == "sair-conta" {
 		c, e := conta.NovoClient(config.GetCloudEndpoint())
@@ -203,10 +239,17 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		if e = c.Logout(ctx, identidade.Token); e != nil {
 			return e
 		}
-		return encerrarContaLocal(identidade)
+		if err := encerrarContaLocal(identidade); err != nil {
+			return err
+		}
+		informarConta("Acesso deste computador encerrado. Seu cofre local continua protegido.")
+		return nil
 	}
 	if args[0] == "painel" {
 		return painelEmpresa(path, password, identidade, client)
+	}
+	if args[0] == "convites" {
+		return convitesRecebidosConta(client)
 	}
 	if args[0] == "comprar" || args[0] == "renovar" {
 		hostname, _ := os.Hostname()
@@ -223,18 +266,18 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 			return err
 		}
 		defer sessao.Close()
-		fmt.Println("Compra vinculada à sua conta. Mantenha o Kofre aberto.")
+		informarConta("Compra vinculada à sua conta. Mantenha o Kofre aberto.")
 		if err = compra.AbrirNavegador(sessao.URL); err != nil {
-			fmt.Println("Abra este endereço para continuar:", sessao.URL)
+			informarConta("Abra este endereço para continuar:", sessao.URL)
 		}
-		resultado, err := sessao.Aguardar(ctx)
+		resultado, err := aguardarCompraConta(sessao)
 		if err != nil {
 			return err
 		}
 		if resultado.Sandbox {
-			fmt.Println("Pagamento de homologação confirmado; não concede uma assinatura de produção.")
+			informarConta("Pagamento de homologação confirmado; não concede uma assinatura de produção.")
 		} else {
-			fmt.Println("Assinatura confirmada. Sua organização:", resultado.OrganizacaoID)
+			informarConta("Assinatura confirmada. Sua organização:", resultado.OrganizacaoID)
 		}
 		return sessao.Confirmar(ctx)
 	}
@@ -259,14 +302,14 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		} else if !errors.Is(err, storage.ErrNotFound) {
 			return err
 		}
-		fmt.Println("Conta conectada. Seu cofre local foi preservado; a sincronização usará esta conta.")
+		informarConta("Conta conectada. Seu cofre local foi preservado; a sincronização usará esta conta.")
 		return nil
 	}
 	if args[0] == "fingerprint" {
 		pub, _ := identidade.Publica()
 		sign, _ := identidade.PublicaAssinatura()
-		fmt.Println("Conta:", identidade.ID)
-		fmt.Println("Fingerprint:", corporativo.FingerprintIdentidade(pub, sign))
+		informarConta("Conta:", identidade.ID)
+		informarConta("Fingerprint:", corporativo.FingerprintIdentidade(pub, sign))
 		return nil
 	}
 	if args[0] == "publicar-chave" {
@@ -304,7 +347,7 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		if err = client.Request(ctx, "PUT", "/v1/corporativo/identidade/chave", map[string]string{"chave_publica": publica, "chave_assinatura": assinatura}, nil); err != nil {
 			return err
 		}
-		fmt.Println("Identidade configurada. Faça uma cópia protegida com kofre empresa exportar.")
+		informarConta("Identidade configurada. Faça uma cópia protegida com kofre empresa exportar.")
 		return nil
 	}
 	if args[0] == "exportar" {
@@ -314,7 +357,11 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		if _, err := os.Stat(args[1]); err == nil {
 			return errors.New("destino já existe; escolha outro arquivo")
 		}
-		return exportarIdentidadeConta(args[1], identidade, password)
+		if err := exportarIdentidadeConta(args[1], identidade, password); err != nil {
+			return err
+		}
+		informarConta("Backup protegido exportado para:", args[1])
+		return nil
 	}
 	if args[0] == "listar" {
 		var resposta map[string]any
@@ -323,7 +370,7 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 			return err
 		}
 		b, _ := json.MarshalIndent(resposta, "", "  ")
-		fmt.Println(string(b))
+		informarConta(string(b))
 		return nil
 	}
 	if len(args) < 2 {
@@ -342,24 +389,28 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 			return err
 		}
 		if contrato.Cancelado || !contrato.Recorrente {
-			fmt.Println("Este contrato não possui renovação automática ativa.")
+			informarConta("Este contrato não possui renovação automática ativa.")
 			return nil
 		}
-		if perguntarEmpresa("O período pago será mantido. Digite CANCELAR para interromper a renovação") != "CANCELAR" {
+		if !confirmarEmpresa("O período pago será mantido. Digite CANCELAR para interromper a renovação", "CANCELAR") {
 			return nil
 		}
 		if err := client.Request(ctx, "POST", "/v1/billing/orders/"+contrato.PedidoID+"/cancel", nil, nil); err != nil {
 			return err
 		}
-		fmt.Println("Renovação cancelada. O acesso continua até o fim do período pago.")
+		informarConta("Renovação cancelada. O acesso continua até o fim do período pago.")
 		return nil
 	case "assinatura":
 		var contrato map[string]any
 		if err := client.Request(ctx, "GET", base+"/assinatura", nil, &contrato); err != nil {
 			return err
 		}
-		b, _ := json.MarshalIndent(contrato, "", "  ")
-		fmt.Println(textoEmpresa(string(b)))
+		if interfaceConta != nil {
+			informarConta(resumoAssinatura(contrato))
+		} else {
+			b, _ := json.MarshalIndent(contrato, "", "  ")
+			informarConta(string(b))
+		}
 		return nil
 	case "assentos":
 		if len(args) != 3 {
@@ -381,13 +432,13 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		if err := client.Request(ctx, "GET", base+"/assinatura/assentos?quantidade="+strconv.Itoa(n), nil, &resposta); err != nil {
 			return err
 		}
-		fmt.Printf("Quantidade desejada: %d. Próximo ciclo: R$ %.2f.\n", n, float64(resposta.Proximo)/100)
+		informarContaFormato("Quantidade desejada: %d. Próximo ciclo: R$ %.2f.\n", n, float64(resposta.Proximo)/100)
 		if resposta.Cotacao.Acrescimo > 0 {
-			fmt.Printf("Acréscimo proporcional: R$ %.2f, válido até %s. Liberação após pagamento.\n", float64(resposta.Cotacao.Centavos)/100, resposta.Cotacao.Fim)
+			informarContaFormato("Acréscimo proporcional: R$ %.2f, válido até %s. Liberação após pagamento.\n", float64(resposta.Cotacao.Centavos)/100, resposta.Cotacao.Fim)
 		} else {
-			fmt.Println("A quantidade paga continua disponível até a renovação.")
+			informarConta("A quantidade paga continua disponível até a renovação.")
 		}
-		if perguntarEmpresa("Digite CONFIRMAR para prosseguir") != "CONFIRMAR" {
+		if !confirmarEmpresa("Digite CONFIRMAR para prosseguir", "CONFIRMAR") {
 			return nil
 		}
 		var ajuste struct {
@@ -401,10 +452,10 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		}
 		if ajuste.Ajuste.CheckoutURL != "" {
 			if err := compra.AbrirNavegador(ajuste.Ajuste.CheckoutURL); err != nil {
-				fmt.Println("Continue o pagamento:", ajuste.Ajuste.CheckoutURL)
+				informarConta("Continue o pagamento:", ajuste.Ajuste.CheckoutURL)
 			}
 		}
-		fmt.Println("Estado do ajuste:", textoEmpresa(ajuste.Ajuste.Status))
+		informarConta("Estado do ajuste:", textoEmpresa(ajuste.Ajuste.Status))
 		return nil
 	case "papel":
 		if len(args) != 4 {
@@ -428,21 +479,21 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		if e != nil {
 			return e
 		}
-		fmt.Println("Pessoas:")
+		informarConta("Pessoas:")
 		for id, pessoa := range recursos.Pessoas {
-			fmt.Printf("  %s  %s\n", id, textoEmpresa(pessoa.Nome))
+			informarContaFormato("  %s  %s\n", id, textoEmpresa(pessoa.Nome))
 		}
-		fmt.Println("Workspaces:")
+		informarConta("Workspaces:")
 		for id, workspace := range recursos.Workspaces {
-			fmt.Printf("  %s  %s\n", id, textoEmpresa(workspace.Nome))
+			informarContaFormato("  %s  %s\n", id, textoEmpresa(workspace.Nome))
 		}
-		fmt.Println("Equipes:")
+		informarConta("Equipes:")
 		for id, equipe := range recursos.Equipes {
-			fmt.Printf("  %s  %s (%d pessoas)\n", id, textoEmpresa(equipe.Nome), len(equipe.Membros))
+			informarContaFormato("  %s  %s (%d pessoas)\n", id, textoEmpresa(equipe.Nome), len(equipe.Membros))
 		}
-		fmt.Println("Itens disponíveis:")
+		informarConta("Itens disponíveis:")
 		for id, resumo := range recursos.Segredos {
-			fmt.Printf("  %s  workspace %s  %s\n", id, resumo.Workspace, resumo.Papel)
+			informarContaFormato("  %s  workspace %s  %s\n", id, resumo.Workspace, resumo.Papel)
 		}
 		return nil
 	case "workspace":
@@ -452,7 +503,7 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		id := nonceEmpresa()
 		err = client.Request(ctx, "PUT", base+"/workspaces/"+id, corporativo.Workspace{Nome: args[2]}, nil)
 		if err == nil {
-			fmt.Println("Workspace:", id)
+			informarConta("Workspace:", id)
 		}
 	case "equipe", "atualizar-equipe":
 		if args[0] == "equipe" && len(args) != 4 || args[0] == "atualizar-equipe" && len(args) != 5 {
@@ -465,29 +516,37 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		}
 		err = client.Request(ctx, "PUT", base+"/equipes/"+id, corporativo.Equipe{Nome: nome, Membros: strings.Split(membros, ",")}, nil)
 		if err == nil {
-			fmt.Println("Equipe:", id)
+			informarConta("Equipe:", id)
 		}
 	case "convidar":
 		if len(args) != 3 {
 			return errors.New("informe o destinatário")
 		}
 		var convite map[string]string
-		err = client.Request(ctx, "POST", base+"/convites", map[string]string{"destinatario": args[2]}, &convite)
+		campo := "destinatario"
+		if strings.Contains(args[2], "@") {
+			campo = "email"
+		}
+		err = client.Request(ctx, "POST", base+"/convites", map[string]string{campo: args[2]}, &convite)
 		if err == nil {
-			fmt.Println("Código do convite (envie por canal seguro):", convite["codigo"])
+			if campo == "email" {
+				informarConta("Convite criado. A pessoa será avisada por e-mail e poderá aceitar em Minha conta → Convites recebidos.")
+			} else {
+				informarConta("Código do convite (envie por canal seguro):", convite["codigo"])
+			}
 		}
 	case "transferir":
-		if len(args) != 3 || perguntarEmpresa("Digite TRANSFERIR para confirmar") != "TRANSFERIR" {
+		if len(args) != 3 || !confirmarEmpresa("Digite TRANSFERIR para confirmar", "TRANSFERIR") {
 			return errors.New("transferência não confirmada")
 		}
 		err = client.Request(ctx, "PUT", base+"/proprietario", map[string]string{"novo_proprietario": args[2], "confirmacao": "TRANSFERIR"}, nil)
 	case "remover":
-		if len(args) != 3 || perguntarEmpresa("Digite REMOVER para confirmar") != "REMOVER" {
+		if len(args) != 3 || !confirmarEmpresa("Digite REMOVER para confirmar", "REMOVER") {
 			return errors.New("remoção não confirmada")
 		}
 		err = client.Request(ctx, "DELETE", base+"/membros/"+args[2], nil, nil)
 	case "excluir":
-		if len(args) != 3 || perguntarEmpresa("Digite EXCLUIR para confirmar") != "EXCLUIR" {
+		if len(args) != 3 || !confirmarEmpresa("Digite EXCLUIR para confirmar", "EXCLUIR") {
 			return errors.New("exclusão não confirmada")
 		}
 		err = client.Request(ctx, "DELETE", base+"/segredos/"+args[2], nil, nil)
@@ -495,7 +554,7 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		if len(args) != 3 {
 			return errors.New("informe o item")
 		}
-		if perguntarEmpresa("Exibir conteúdo secreto no terminal? Digite MOSTRAR") != "MOSTRAR" {
+		if !confirmarEmpresa("Exibir conteúdo secreto no terminal? Digite MOSTRAR", "MOSTRAR") {
 			return errors.New("exibição cancelada")
 		}
 		data, _, e := client.Ler(ctx, org, args[2])
@@ -517,7 +576,7 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 			if len(args) != 4 {
 				return errors.New("informe organização, workspace e ID da entrada pessoal")
 			}
-			v, e := runner.UnlockVault(resolveVaultPath(""))
+			v, e := abrirCofreSemChaveConta(resolveVaultPath(""))
 			if e != nil {
 				return e
 			}
@@ -543,7 +602,7 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 			acesso = recebida.Acesso
 			if args[0] == "editar" {
 				mycrypto.ZeroBytes(data)
-				v, e := runner.UnlockVault(resolveVaultPath(""))
+				v, e := abrirCofreSemChaveConta(resolveVaultPath(""))
 				if e != nil {
 					return e
 				}
@@ -587,14 +646,14 @@ func executarAcaoEmpresa(args []string, path string, password []byte, identidade
 		if err == nil {
 			err = salvarIdentidadeConta(path, identidade, password)
 			if err == nil {
-				fmt.Println("Item corporativo:", item)
+				informarConta("Item corporativo:", item)
 			}
 		}
 	default:
 		return errors.New("comando desconhecido; use kofre empresa ajuda")
 	}
 	if err == nil {
-		fmt.Println("Operação confirmada pelo Cloud.")
+		informarConta("Operação confirmada pelo Cloud.")
 	}
 	return err
 }

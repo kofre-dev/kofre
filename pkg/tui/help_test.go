@@ -3,6 +3,7 @@ package tui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"kofre/pkg/vault"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ func TestResponsiveFooterAndListSpace(t *testing.T) {
 				t.Fatalf("rodape excedeu %d colunas", width)
 			}
 		}
-		if !strings.Contains(m.listFooter(), "F1 Ajuda") {
+		if !strings.Contains(ansi.Strip(m.listFooter()), "F1 Ajuda") {
 			t.Fatal("atalho da ajuda sumiu")
 		}
 	}

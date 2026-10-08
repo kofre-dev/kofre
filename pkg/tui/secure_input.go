@@ -17,7 +17,8 @@ type secretInputState struct {
 // O estado por ponteiro permite apagar também os modelos anteriores do Bubble Tea.
 type input struct {
 	textinput.Model
-	secret *secretInputState
+	secret  *secretInputState
+	visivel bool // Notas podem ser lidas durante a edição, mantendo o buffer apagável.
 }
 
 func newInput(secret bool) input {
@@ -87,6 +88,9 @@ func (i input) View() string {
 		return i.Prompt + i.Placeholder
 	}
 	masked := strings.Repeat("•", len(i.secret.runes))
+	if i.visivel {
+		masked = textoSeguroMenu(string(i.secret.runes))
+	}
 	if i.Focused() {
 		masked += "│"
 	}

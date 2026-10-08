@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	tea "github.com/charmbracelet/bubbletea"
 	"kofre/pkg/config"
 	"kofre/pkg/storage"
@@ -21,6 +22,20 @@ func (m Model) abrirConta() (tea.Model, tea.Cmd) {
 	if err != nil {
 		m.err = err
 		return m, nil
+	}
+	if m.vault != nil && m.vault.TemConta() {
+		var meta struct {
+			ID string `json:"id"`
+		}
+		if e := m.vault.LerConta(func(b []byte) error { return json.Unmarshal(b, &meta) }); e == nil && meta.ID != "" {
+			if cfg, e := config.LoadConfig(); e == nil && !cfg.ContaConfigurada {
+				cfg.ContaConfigurada = true
+				if e = config.SaveConfig(cfg); e != nil {
+					m.err = e
+					return m, nil
+				}
+			}
+		}
 	}
 	local := m.storage
 	var remoto storage.StorageProvider

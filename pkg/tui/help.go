@@ -49,10 +49,18 @@ func wrapHelp(items []string, width int) string {
 }
 
 func (m Model) listFooter() string {
-	return m.estilos().helpStyle.Render(wrapHelp([]string{
-		"↑↓ Navegar", "Enter Abrir", "c Copiar", "/ Buscar",
-		"n Novo", "m Mudar Senha", "Ctrl+E Conta/empresas", "Ctrl+L Bloquear", "F1 Ajuda", "F2 Temas", "q Sair",
-	}, max(16, m.larguraAcesso()-4)))
+	w := max(16, m.larguraAcesso()-4)
+	atalhos := [][2]string{
+		{"Enter", "Abrir"}, {"/", "Buscar"}, {"n", "Novo"}, {"c", "Copiar"}, {"d/Del", "Excluir"},
+		{"Ctrl+E", "Conta e nuvem"}, {"Ctrl+L", "Bloquear"}, {"F1", "Ajuda"}, {"q", "Sair"},
+	}
+	tecla := lipgloss.NewStyle().Bold(true).Foreground(m.cores().Destaque)
+	rotulo := lipgloss.NewStyle().Foreground(m.cores().Suave)
+	var itens []string
+	for _, item := range atalhos {
+		itens = append(itens, tecla.Render(item[0])+" "+rotulo.Render(item[1]))
+	}
+	return wrapHelp(itens, w)
 }
 
 func (m Model) helpLines() []string {
@@ -66,7 +74,7 @@ func (m Model) helpLines() []string {
 		"c: copiar o segredo principal",
 		"/: buscar; Esc: sair da busca",
 		"n: nova credencial",
-		"d: excluir credencial",
+		"d/Del: excluir credencial com confirmação",
 		"m: alterar senha mestre do cofre (recriptografia)",
 		"Tab/Shift+Tab: mudar categoria",
 		"p: plano e status Pro",

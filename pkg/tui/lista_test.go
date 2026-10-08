@@ -34,3 +34,29 @@ func TestListaAlinhaColunasEPreservaRolagem(t *testing.T) {
 		}
 	}
 }
+
+func TestListaAcompanhaTerminalEMantemAtalhosNoRodape(t *testing.T) {
+	m := fixtureModel(t)
+	_, err := m.vault.AddEntry(vault.SecretEntry{Title: "Credencial de teste", Category: vault.CategoryPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.refreshList()
+	for _, tamanho := range [][2]int{{80, 30}, {160, 60}} {
+		m.width, m.height = tamanho[0], tamanho[1]
+		view := ansi.Strip(m.View())
+		if lipgloss.Width(view) != m.width-2 || lipgloss.Height(view) != m.height-1 {
+			t.Fatalf("quadro %dx%d não acompanha terminal %dx%d", lipgloss.Width(view), lipgloss.Height(view), m.width, m.height)
+		}
+		linhas := strings.Split(view, "\n")
+		posicao := -1
+		for i, linha := range linhas {
+			if strings.Contains(linha, "F1 Ajuda") {
+				posicao = i
+			}
+		}
+		if posicao < len(linhas)-5 {
+			t.Fatal("atalhos não ficaram no rodapé")
+		}
+	}
+}

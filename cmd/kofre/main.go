@@ -55,10 +55,10 @@ func printHelp() {
   kofre info              Exibe os caminhos e status do cofre atual
 
 Injeção Segura de Ambiente (Sem arquivos .env no disco):
-  kofre exec python main.py
-  kofre exec npm run dev
-  kofre exec --only "AWS" -- aws s3 ls
-  kofre shell --ttl 30m
+  kofre exec --entry "Projeto" --fields API_TOKEN -- python main.py
+  kofre exec --entry "Projeto" --fields API_TOKEN -- npm run dev
+  kofre exec --entry "AWS" --fields AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY -- aws s3 ls
+  kofre shell --entry "Projeto" --fields API_TOKEN --ttl 30m
 
 Opções Globais (Flags):
   --vault <caminho>         Especifica um arquivo de cofre personalizado

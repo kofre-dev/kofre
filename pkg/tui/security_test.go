@@ -84,8 +84,8 @@ func TestNotasNaoVazamNaViewEEdicaoPreservaConteudo(t *testing.T) {
 		t.Fatal("nota sem campos não pode ser selecionada")
 	}
 	m.initForm(entry, true)
-	if strings.Contains(m.viewForm(), nota) {
-		t.Fatal("nota apareceu no formulário sem revelação")
+	if !strings.Contains(m.viewForm(), nota) {
+		t.Fatal("nota deve ficar legível durante a edição explícita")
 	}
 	m.formInputs[0].SetValue("Novo título")
 	next, _ := m.saveForm()

@@ -288,6 +288,16 @@ func (s *SyncStorage) Close() { s.cancel(); <-s.done }
 // Permite reabrir a sincronização após trocar a configuração de conta.
 func (s *SyncStorage) Providers() (StorageProvider, StorageProvider) { return s.local, s.remote }
 
+// Apenas observação do estado local do worker; não executa rede nem autoriza acesso.
+func (s *SyncStorage) StatusSincronizacao() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.initErr != nil {
+		return true, s.initErr
+	}
+	return s.pending != nil || s.syncing || s.candidato != nil, s.lastErr
+}
+
 // Path identifica o arquivo local também quando a sincronização está ativa.
 func (s *SyncStorage) Path() string {
 	if local, ok := s.local.(interface{ Path() string }); ok {

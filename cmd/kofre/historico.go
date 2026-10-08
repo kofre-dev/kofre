@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"kofre/pkg/config"
 	mycrypto "kofre/pkg/crypto"
-	"kofre/pkg/runner"
 	"kofre/pkg/storage"
-	"kofre/pkg/tui"
 	"kofre/pkg/vault"
 	"time"
 )
@@ -29,14 +27,14 @@ func executarHistorico(args []string) error {
 			return err
 		}
 		if len(versoes) == 0 {
-			fmt.Println("Ainda não há versões anteriores guardadas.")
+			informarConta("Ainda não há versões anteriores guardadas.")
 			return nil
 		}
 		nomes := make([]string, len(versoes))
 		for i, v := range versoes {
 			nomes[i] = v.CriadaEm.Local().Format("02/01/2006 15:04:05")
 		}
-		i, err := tui.EscolherOpcao("Escolha uma versão para restaurar", nomes)
+		i, err := escolherOpcaoConta("Escolha uma versão para restaurar", nomes)
 		if err != nil || i < 0 {
 			return err
 		}
@@ -47,14 +45,14 @@ func executarHistorico(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println("Histórico cifrado do seu cofre pessoal")
+		informarConta("Histórico cifrado do seu cofre pessoal")
 		for _, v := range versoes {
-			fmt.Printf("%s  %s\n", v.CriadaEm.Local().Format("02/01/2006 15:04:05"), v.ID)
+			informarContaFormato("%s  %s\n", v.CriadaEm.Local().Format("02/01/2006 15:04:05"), v.ID)
 		}
 		if len(versoes) == 0 {
-			fmt.Println("Ainda não há versões anteriores guardadas.")
+			informarConta("Ainda não há versões anteriores guardadas.")
 		} else {
-			fmt.Println("Para restaurar: kofre historico restaurar <versão>. A senha usada nessa versão será necessária.")
+			informarConta("Para restaurar: kofre historico restaurar <versão>. A senha usada nessa versão será necessária.")
 		}
 		return nil
 	}
@@ -84,7 +82,7 @@ func executarHistorico(args []string) error {
 		return fmt.Errorf("versão não validada; nenhum arquivo foi alterado: %w", err)
 	}
 	defer aberto.Close()
-	if perguntarEmpresa("Restaurar esta versão e preservar backup do cofre atual? Digite RESTAURAR") != "RESTAURAR" {
+	if !confirmarEmpresa("Restaurar esta versão e preservar backup do cofre atual? Digite RESTAURAR", "RESTAURAR") {
 		return nil
 	}
 	local, err := storage.NewLocalStorage(resolveVaultPath(""))
@@ -104,8 +102,8 @@ func executarHistorico(args []string) error {
 		return fmt.Errorf("há diferenças entre este PC e a nuvem; preserve as duas cópias e use kofre pull antes de restaurar")
 	}
 	// Restaurar credenciais não pode reverter tokens, convites ou chaves da conta.
-	fmt.Println("Confirme a senha mestra atual para preservar a conta nesta restauração.")
-	cofreAtual, chaveAtual, _, err := runner.UnlockVaultWithKey(resolveVaultPath(""))
+	informarConta("Confirme a senha mestra atual para preservar a conta nesta restauração.")
+	cofreAtual, chaveAtual, _, err := abrirCofreConta(resolveVaultPath(""))
 	mycrypto.ZeroBytes(chaveAtual)
 	if err != nil {
 		return err
@@ -140,7 +138,7 @@ func executarHistorico(args []string) error {
 		return err
 	}
 	if backup != "" {
-		fmt.Println("Backup cifrado preservado em:", backup)
+		informarConta("Backup cifrado preservado em:", backup)
 	}
 	if err := sync.Save(ctx, data); err != nil {
 		return err
@@ -148,6 +146,6 @@ func executarHistorico(args []string) error {
 	if err := sync.Flush(30 * time.Second); err != nil {
 		return fmt.Errorf("versão restaurada localmente; envio pendente e backup preservado: %w", err)
 	}
-	fmt.Println("Versão restaurada no computador e na nuvem. Use a senha mestra dessa versão ao abrir.")
+	informarConta("Versão restaurada no computador e na nuvem. Use a senha mestra dessa versão ao abrir.")
 	return nil
 }

@@ -44,9 +44,38 @@ func UnlockVaultWithKey(vaultPath string) (*vault.ManagedVault, []byte, []byte, 
 // UnlockVaultData autentica uma cópia candidata em memória, sem instalá-la no
 // disco. Usado também em downloads para validar antes de substituir o local.
 func UnlockVaultData(rawData []byte, vaultPath string) (*vault.ManagedVault, []byte, []byte, error) {
+	return unlockVaultDataComEntrada(rawData, vaultPath, nil)
+}
+
+// UnlockVaultComEntrada usa o mesmo limitador, KDF e autenticação da CLI,
+// mas solicita a senha pela interface do chamador, sem consultar o ambiente.
+// A posse do buffer retornado passa ao runner, que o apaga inclusive em erro.
+func UnlockVaultComEntrada(vaultPath string, entrada func() ([]byte, error)) (*vault.ManagedVault, []byte, []byte, error) {
+	if entrada == nil {
+		return nil, nil, nil, errors.New("entrada segura não informada")
+	}
+	raw, err := os.ReadFile(vaultPath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return unlockVaultDataComEntrada(raw, vaultPath, entrada)
+}
+
+func unlockVaultDataComEntrada(rawData []byte, vaultPath string, entrada func() ([]byte, error)) (*vault.ManagedVault, []byte, []byte, error) {
 	salt, encryptedPayload, err := vault.UnpackHeader(rawData)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	// Cancelar o formulário não é uma tentativa de autenticação. O leitor da
+	// TUI entrega o buffer antes de reservar a tentativa, ainda antes da KDF.
+	var secret []byte
+	if entrada != nil {
+		secret, err = entrada()
+		if err != nil {
+			mycrypto.ZeroBytes(secret)
+			return nil, nil, nil, err
+		}
+		defer mycrypto.ZeroBytes(secret)
 	}
 	tentativa, err := acesso.Novas(vaultPath).Iniciar(time.Now())
 	if err != nil {
@@ -54,19 +83,21 @@ func UnlockVaultData(rawData []byte, vaultPath string) (*vault.ManagedVault, []b
 	}
 	defer tentativa.Fechar()
 
-	secret := []byte(os.Getenv("KOFRE_PIN"))
-	if len(secret) == 0 {
-		secret = []byte(os.Getenv("MYCOFRE_PIN"))
-	}
-	if len(secret) == 0 {
-		fmt.Print("🔐 Kofre — Digite seu PIN ou chave mestra: ")
-		bytePass, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Println()
-		if err != nil {
-			mycrypto.ZeroBytes(bytePass)
-			return nil, nil, nil, fmt.Errorf("falha ao ler entrada segura: %w", err)
+	if entrada == nil {
+		secret = []byte(os.Getenv("KOFRE_PIN"))
+		if len(secret) == 0 {
+			secret = []byte(os.Getenv("MYCOFRE_PIN"))
 		}
-		secret = bytePass
+		if len(secret) == 0 {
+			fmt.Print("🔐 Kofre — Digite seu PIN ou chave mestra: ")
+			bytePass, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Println()
+			if err != nil {
+				mycrypto.ZeroBytes(bytePass)
+				return nil, nil, nil, fmt.Errorf("falha ao ler entrada segura: %w", err)
+			}
+			secret = bytePass
+		}
 	}
 	defer mycrypto.ZeroBytes(secret)
 	secretNormalizado := bytes.TrimSpace(secret)

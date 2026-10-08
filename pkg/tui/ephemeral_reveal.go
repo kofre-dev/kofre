@@ -8,6 +8,8 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"kofre/pkg/config"
 	mycrypto "kofre/pkg/crypto"
 	"kofre/pkg/vault"
 )
@@ -44,8 +46,13 @@ func (v *ephemeralSecretViewer) Run() (err error) {
 		}
 	}()
 	write := func(text string) error { _, e := io.WriteString(out, text); return e }
+	tema := temas[0]
+	if cfg, e := config.LoadConfig(); e == nil {
+		tema = temas[indiceTema(cfg.Tema)]
+	}
+	borda := lipgloss.NewStyle().Foreground(tema.Destaque).Render("────────────────────────────────────────────────────")
 	header := func() error {
-		if e := write("\x1b[2J\x1b[H======================================================================\r\nKOFRE 🔐 VISUALIZAÇÃO TEMPORÁRIA\r\nItem: "); e != nil {
+		if e := write("\x1b[2J\x1b[H" + lipgloss.NewStyle().Bold(true).Foreground(tema.Destaque).Render("🛡️  Kofre · Visualização temporária") + "\r\n" + borda + "\r\n\r\nItem: "); e != nil {
 			return e
 		}
 		if e := escreverTextoTerminal(out, []byte(v.title), false); e != nil {
@@ -57,12 +64,12 @@ func (v *ephemeralSecretViewer) Run() (err error) {
 		if e := escreverTextoTerminal(out, []byte(v.field.Name), false); e != nil {
 			return e
 		}
-		return write("\r\n======================================================================\r\n\r\n")
+		return write("\r\n" + borda + "\r\n\r\n")
 	}
 	if err = header(); err != nil {
 		return err
 	}
-	if err = write("Pressione ENTER para revelar por 10 segundos (ou outra tecla para cancelar): "); err != nil {
+	if err = write("[Enter] Revelar por 10 segundos · [Esc] Voltar\r\n"); err != nil {
 		return err
 	}
 	// Lê somente a confirmação, sem prefetch nem goroutine que sobreviva ao
@@ -97,7 +104,7 @@ func (v *ephemeralSecretViewer) Run() (err error) {
 		return err
 	}
 
-	if err = write("\r\n\r\n======================================================================\r\n[Limpeza e retorno automáticos em 10 segundos]\r\n"); err != nil {
+	if err = write("\r\n\r\n" + borda + "\r\nLimpeza e retorno automáticos em 10 segundos.\r\n"); err != nil {
 		return err
 	}
 	wait := v.wait

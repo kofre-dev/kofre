@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"kofre/pkg/config"
 	"kofre/pkg/corporativo"
 	mycrypto "kofre/pkg/crypto"
-	"kofre/pkg/runner"
 	"kofre/pkg/tui"
 	"sort"
 	"strings"
@@ -15,40 +14,154 @@ import (
 )
 
 func painelConta() error {
+	return tui.ExecutarPainel(func(p *tui.PainelInterativo) error {
+		interfaceConta = p
+		defer func() { interfaceConta = nil; mensagensConta.Reset() }()
+		return painelContaLoop()
+	})
+}
+
+func painelContaLoop() error {
 	for {
-		i, err := tui.EscolherOpcao("Kofre · Conta e empresas", []string{"Criar conta gratuita por e-mail", "Minha conta / administrar empresas", "Entrar por e-mail neste PC", "Recuperar acesso por e-mail", "Conhecer Pro pessoal", "Histórico do cofre pessoal", "Sessões e dispositivos", "Atualizar backup da conta na nuvem", "Encerrar acesso deste PC", "Restaurar backup manual", "Voltar ao cofre"})
+		opcoes := []string{"Ativar nuvem gratuita", "Entrar na minha conta", "Empresas e equipes", "Conhecer planos", "Voltar ao cofre"}
+		descricoes := []string{
+			"Sincronize entre PCs gratuitamente. Cadastre seu e-mail e use a mesma senha mestra.",
+			"Já tem conta? Entre neste PC. Aqui também ficam sessões, backups e recuperação de acesso.",
+			"Acesse suas empresas ou aceite um convite. Seu cofre pessoal permanece privado e separado.",
+			"Conheça o Pro pessoal e o Corporativo para equipes. Você pode contratar usando uma conta Free.",
+			"Volte às suas credenciais pessoais. O uso offline continua gratuito e não exige cadastro.",
+		}
+		if cfg, e := config.LoadConfig(); e == nil {
+			if cfg.ContaConfigurada || cfg.ContaID != "" {
+				opcoes[0], opcoes[1] = "Sincronizar cofre", "Minha conta"
+				descricoes[0] = "Sua conta já existe. Sincronize este cofre entre PCs; os dados são cifrados antes do envio."
+				descricoes[1] = "Consulte sua identidade e gerencie sessões, backups ou recuperação de acesso."
+			}
+			if cfg.CloudEnabled {
+				opcoes[0] = "Sincronização"
+			}
+		}
+		i, err := escolherOpcaoContaExplicada("Kofre · Conta e empresas", opcoes, descricoes)
 		if err != nil {
 			return err
 		}
-		if i < 0 || i == 10 {
+		if i < 0 || i == 4 {
 			return nil
 		}
 		switch i {
 		case 0:
-			err = executarEmpresa([]string{"criar-conta"})
+			err = executarEmpresa([]string{"ativar-nuvem"})
 		case 1:
-			err = executarEmpresa([]string{"painel"})
+			err = menuContaPessoal()
 		case 2:
-			err = executarEmpresa([]string{"entrar"})
+			err = acessarEmpresasConta("painel", executarEmpresa)
 		case 3:
-			err = executarEmpresa([]string{"recuperar-email"})
-		case 4:
-			handlePro()
-		case 5:
-			err = executarHistorico([]string{"painel"})
-		case 6:
-			err = executarEmpresa([]string{"sessoes"})
-		case 7:
-			err = executarEmpresa([]string{"backup-conta"})
-		case 8:
-			err = executarEmpresa([]string{"sair-conta"})
-		case 9:
-			err = executarEmpresa([]string{"restaurar", perguntarEmpresa("Arquivo de identidade .enc")})
+			err = menuPlanosConta()
 		}
-		if err != nil {
-			fmt.Println("Não foi possível concluir:", err)
+		if e := concluirAcaoConta(err); e != nil {
+			return e
 		}
-		perguntarEmpresa("Enter para voltar ao menu")
+	}
+}
+
+func menuContaPessoal() error {
+	op, err := escolherOpcaoContaExplicada("Minha conta", []string{"Entrar por e-mail neste PC", "Minha identidade e empresas", "Sessões e dispositivos", "Backup e recuperação", "Convites recebidos", "Encerrar acesso deste PC", "Voltar"}, []string{
+		"Conecte uma conta existente usando e-mail e senha mestra. Não cria uma nova conta.",
+		"Veja sua identificação para convites e acesse as empresas das quais participa.",
+		"Consulte os computadores conectados e encerre sessões que não reconhecer.",
+		"Recupere acesso, consulte o histórico ou gerencie backups protegidos da conta.",
+		"Veja as empresas que convidaram seu e-mail e aceite ou recuse no aplicativo.",
+		"Encerre a sessão desta conta neste computador. As credenciais locais não são apagadas.",
+		"Volte ao menu de conta e empresas.",
+	})
+	if err != nil || op < 0 || op == 6 {
+		return err
+	}
+	if op == 3 {
+		return menuBackupConta()
+	}
+	if op == 1 {
+		return acessarEmpresasConta("painel", executarEmpresa)
+	}
+	acoes := []string{"entrar", "painel", "sessoes", "", "convites", "sair-conta"}
+	return executarEmpresa([]string{acoes[op]})
+}
+
+func menuBackupConta() error {
+	op, err := escolherOpcaoContaExplicada("Backup e recuperação", []string{"Recuperar acesso por e-mail", "Histórico do cofre pessoal", "Atualizar backup da conta na nuvem", "Restaurar backup manual", "Voltar"}, []string{
+		"Recupere o acesso à conta por e-mail. Para abrir os dados cifrados, você ainda precisa da senha mestra.",
+		"Consulte as versões disponíveis do cofre pessoal. A disponibilidade depende do seu plano.",
+		"Envie uma cópia cifrada da identidade da conta para facilitar a recuperação de acesso.",
+		"Restaure sua identidade a partir de um arquivo de backup protegido, usando a senha da exportação.",
+		"Volte sem alterar seu cofre ou sua conta.",
+	})
+	if err != nil || op < 0 || op == 4 {
+		return err
+	}
+	switch op {
+	case 0:
+		return executarEmpresa([]string{"recuperar-email"})
+	case 1:
+		return executarHistorico([]string{"painel"})
+	case 2:
+		return executarEmpresa([]string{"backup-conta"})
+	case 3:
+		arquivo, e := solicitarEmpresa("Arquivo de identidade .enc")
+		if e != nil {
+			return e
+		}
+		return executarEmpresa([]string{"restaurar", arquivo})
+	}
+	return nil
+}
+
+func menuPlanosConta() error {
+	op, err := escolherOpcaoContaExplicada("Planos e assinatura", []string{"Pro pessoal", "Corporativo para minha empresa", "Voltar"}, []string{
+		"Recursos extras para seu cofre pessoal. Não é necessário para participar de uma empresa.",
+		"Contrate assentos para compartilhar credenciais com sua equipe. Cada pessoa mantém seu cofre pessoal separado.",
+		"Volte ao menu sem iniciar uma contratação.",
+	})
+	if err != nil || op < 0 || op == 2 {
+		return err
+	}
+	if op == 0 {
+		return executarProConta()
+	}
+	return contratarCorporativoConta(executarEmpresa)
+}
+
+func contratarCorporativoConta(executar func([]string) error) error {
+	return acessarEmpresasConta("comprar", executar)
+}
+
+func acessarEmpresasConta(acaoDesejada string, executar func([]string) error) error {
+	for {
+		err := executar([]string{acaoDesejada})
+		if !errors.Is(err, errContaParaContratar) && !errors.Is(err, errContaParaEmpresas) {
+			return err
+		}
+		titulo := "Empresas · Primeiro conecte sua conta gratuita"
+		if acaoDesejada == "comprar" {
+			titulo = "Corporativo · Primeiro conecte sua conta gratuita"
+		}
+		op, err := escolherOpcaoContaExplicada(titulo, []string{"Criar conta gratuita por e-mail", "Entrar por e-mail neste PC", "Voltar"}, []string{
+			"Crie sua identidade para participar de empresas. Não exige assinatura pessoal Pro nem sincronizar seu cofre.",
+			"Use uma conta já cadastrada. Depois de entrar, você volta ao que estava fazendo.",
+			"Volte sem criar conta ou iniciar uma contratação.",
+		})
+		if err != nil || op < 0 || op == 2 {
+			return err
+		}
+		acao := "criar-conta"
+		if op == 1 {
+			acao = "entrar"
+		}
+		if err := executar([]string{acao}); err != nil {
+			return err
+		}
+		if err := exibirMensagensConta("Conta · Continuar para empresas"); err != nil {
+			return err
+		}
 	}
 }
 
@@ -65,7 +178,7 @@ func escolherRecurso(titulo string, opcoes map[string]string) (string, error) {
 	for i, id := range ids {
 		nomes[i] = opcoes[id] + "  · " + id[:min(8, len(id))]
 	}
-	i, err := tui.EscolherOpcao(titulo, nomes)
+	i, err := escolherOpcaoConta(titulo, nomes)
 	if err != nil {
 		return "", err
 	}
@@ -77,39 +190,76 @@ func escolherRecurso(titulo string, opcoes map[string]string) (string, error) {
 
 func painelEmpresa(path string, senha []byte, identidade *corporativo.Identidade, client *corporativo.Client) error {
 	for {
-		op, err := tui.EscolherOpcao("Conta e empresas · "+identidade.Nome, []string{"Minha identidade / código para receber convites", "Conectar nuvem pessoal Free", "Minhas empresas e credenciais compartilhadas", "Contratar para uma nova empresa", "Aceitar convite de uma empresa", "Exportar backup protegido da identidade", "Voltar"})
+		op, err := escolherOpcaoContaExplicada("Empresas e equipes · "+identidade.Nome,
+			[]string{"Minhas empresas", "Criar minha empresa", "Identificação e backup", "Voltar"},
+			[]string{"Abra credenciais compartilhadas e gerencie equipe e assinatura conforme suas permissões.", "Contrate o Corporativo para sua empresa. Seu cofre pessoal continua separado.", "Consulte sua identificação ou exporte um backup protegido da identidade.", "Volte para Conta e nuvem."})
 		if err != nil {
 			return err
 		}
-		if op < 0 || op == 6 {
+		if op < 0 || op == 3 {
 			return nil
 		}
 		var args []string
 		switch op {
 		case 0:
-			args = []string{"fingerprint"}
-		case 1:
-			args = []string{"conectar"}
-		case 2:
 			args, err = selecionarAcaoOrganizacao(client)
 			if err == nil {
 				err = salvarIdentidadeConta(path, identidade, senha)
 			}
-		case 3:
+		case 1:
 			args = []string{"comprar"}
-		case 4:
-			args = []string{"aceitar", perguntarEmpresa("ID da organização recebido no convite")}
-		case 5:
-			args = []string{"exportar", perguntarEmpresa("Caminho do arquivo de backup .enc")}
+		case 2:
+			detalhe, e := escolherOpcaoConta("Identificação e backup", []string{"Minha identificação para convites", "Exportar backup protegido", "Voltar"})
+			err = e
+			if err == nil && detalhe == 0 {
+				args = []string{"fingerprint"}
+			}
+			if err == nil && detalhe == 1 {
+				arquivo, e := solicitarEmpresa("Caminho do arquivo de backup .enc")
+				err = e
+				if err == nil {
+					args = []string{"exportar", arquivo}
+				}
+			}
 		}
 		if err == nil && len(args) > 0 {
 			err = executarAcaoEmpresa(args, path, senha, identidade, client)
 		}
-		if err != nil {
-			fmt.Println("Não foi possível concluir:", err)
+		if e := concluirAcaoConta(err); e != nil {
+			return e
 		}
-		if len(args) > 0 || err != nil {
-			perguntarEmpresa("Enter para voltar")
+	}
+}
+
+// Mantém os comandos existentes; navegar pelos grupos não executa alterações.
+func escolherAcaoOrganizacao(titulo string) (int, error) {
+	grupos := []struct {
+		nome, descricao string
+		opcoes          []string
+		acoes           []int
+	}{
+		{"Credenciais", "Abra credenciais compartilhadas ou compartilhe um item com a empresa.",
+			[]string{"Abrir credencial", "Compartilhar credencial pessoal", "Dar acesso a uma pessoa", "Dar acesso a uma equipe"}, []int{0, 1, 4, 6}},
+		{"Equipe e workspaces", "Organize pessoas, equipes e espaços de trabalho. Ações dependem do seu papel.",
+			[]string{"Criar workspace", "Convidar pessoa", "Criar equipe", "Remover membro", "Ver pessoas, equipes e workspaces"}, []int{2, 3, 5, 7, 11}},
+		{"Assinatura", "Consulte o contrato e gerencie assentos e renovação conforme suas permissões.",
+			[]string{"Ver assinatura e assentos", "Alterar assentos", "Renovar contrato", "Cancelar renovação automática"}, []int{8, 9, 10, 12}},
+	}
+	for {
+		grupo, err := escolherOpcaoContaExplicada(titulo,
+			[]string{grupos[0].nome, grupos[1].nome, grupos[2].nome, "Voltar"},
+			[]string{grupos[0].descricao, grupos[1].descricao, grupos[2].descricao, "Volte para suas empresas."})
+		if err != nil || grupo < 0 || grupo >= len(grupos) {
+			return -1, err
+		}
+		g := grupos[grupo]
+		opcoes := append(append([]string(nil), g.opcoes...), "Voltar")
+		acao, err := escolherOpcaoConta(titulo+" · "+g.nome, opcoes)
+		if err != nil {
+			return -1, err
+		}
+		if acao >= 0 && acao < len(g.acoes) {
+			return g.acoes[acao], nil
 		}
 	}
 }
@@ -127,6 +277,10 @@ func selecionarAcaoOrganizacao(client *corporativo.Client) ([]string, error) {
 	if err := client.Request(ctx, "GET", "/v1/corporativo/identidade", nil, &conta); err != nil {
 		return nil, err
 	}
+	if len(conta.Organizacoes) == 0 {
+		informarConta("Você ainda não participa de nenhuma empresa. Use Criar minha empresa para contratar o Corporativo ou aguarde um convite enviado pela empresa ao seu e-mail.")
+		return nil, nil
+	}
 	opcoes := map[string]string{}
 	for _, org := range conta.Organizacoes {
 		opcoes[org.ID] = org.Nome + " · " + org.Papel
@@ -138,19 +292,31 @@ func selecionarAcaoOrganizacao(client *corporativo.Client) ([]string, error) {
 	if err != nil || org == "" {
 		return nil, err
 	}
-	op, err := tui.EscolherOpcao(opcoes[org], []string{"Abrir credencial compartilhada", "Compartilhar credencial pessoal", "Criar workspace", "Convidar pessoa", "Compartilhar item com pessoa", "Criar equipe", "Compartilhar item com equipe", "Remover membro", "Assinatura e assentos", "Alterar quantidade de assentos", "Renovar contrato", "Ver pessoas, equipes e workspaces", "Cancelar renovação automática"})
+	op, err := escolherAcaoOrganizacao(opcoes[org])
 	if err != nil || op < 0 {
 		return nil, err
 	}
 	switch op {
 	case 2:
-		return []string{"workspace", org, perguntarEmpresa("Nome do workspace")}, nil
+		valor, e := solicitarEmpresa("Nome do workspace")
+		if e != nil {
+			return nil, e
+		}
+		return []string{"workspace", org, valor}, nil
 	case 3:
-		return []string{"convidar", org, perguntarEmpresa("ID da conta da pessoa (ela encontra em Minha identidade)")}, nil
+		valor, e := solicitarEmpresa("E-mail da pessoa a convidar")
+		if e != nil {
+			return nil, e
+		}
+		return []string{"convidar", org, valor}, nil
 	case 8:
 		return []string{"assinatura", org}, nil
 	case 9:
-		return []string{"assentos", org, perguntarEmpresa("Quantidade total desejada")}, nil
+		valor, e := solicitarEmpresa("Quantidade total desejada")
+		if e != nil {
+			return nil, e
+		}
+		return []string{"assentos", org, valor}, nil
 	case 10:
 		return []string{"renovar", org}, nil
 	case 11:
@@ -196,7 +362,10 @@ func selecionarAcaoOrganizacao(client *corporativo.Client) ([]string, error) {
 		equipes[id] = e.Nome
 	}
 	if op == 5 {
-		nome := perguntarEmpresa("Nome da equipe")
+		nome, err := solicitarEmpresa("Nome da equipe")
+		if err != nil {
+			return nil, err
+		}
 		var membros []string
 		for len(pessoas) > 0 {
 			p, err := escolherRecurso("Selecione membros; Esc conclui a equipe", pessoas)
@@ -219,7 +388,7 @@ func selecionarAcaoOrganizacao(client *corporativo.Client) ([]string, error) {
 		if err != nil || w == "" {
 			return nil, err
 		}
-		v, err := runner.UnlockVault(resolveVaultPath(""))
+		v, err := abrirCofreSemChaveConta(resolveVaultPath(""))
 		if err != nil {
 			return nil, err
 		}

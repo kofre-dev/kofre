@@ -13,6 +13,9 @@ import (
 
 func (m Model) larguraAcesso() int {
 	if m.width > 0 {
+		if m.state == ViewList {
+			return max(24, m.width-4)
+		}
 		return max(24, min(104, m.width-4))
 	}
 	return 96
@@ -32,7 +35,7 @@ func (m Model) cabecalhoAcesso() string {
 		esquerda = marca + "  " + versao + "  " + plano
 	}
 	larguraQuadro := min(72, w-4) + 2 // Inclui as duas bordas do painel.
-	if m.state == ViewList {
+	if m.state == ViewList || m.state == ViewForm {
 		larguraQuadro = w + 2
 	}
 	if m.vault != nil && m.state != ViewUnlock && m.state != ViewTelegramChallenge {

@@ -21,23 +21,24 @@ var (
 
 // AppConfig armazena as configuracoes do usuario
 type AppConfig struct {
-	ContaID       string `json:"conta_id,omitempty"`
-	PlanoCloud    string `json:"plano_cloud,omitempty"` // Somente apresentação; autorização pertence ao servidor.
-	Tema          string `json:"tema,omitempty"`
-	Mode          string `json:"mode"`          // "local" ou "cloud"
-	VaultPath     string `json:"vault_path"`    // caminho do arquivo local
-	CloudEnabled  bool   `json:"cloud_enabled"` // se sincronizacao com S3 esta ativa
-	S3Bucket      string `json:"s3_bucket"`
-	S3Key         string `json:"s3_key"`
-	S3Region      string `json:"s3_region"`
-	S3Endpoint    string `json:"s3_endpoint"` // para Cloudflare R2 ou MinIO
-	S3AccessKey   string `json:"s3_access_key,omitempty"`
-	S3SecretKey   string `json:"s3_secret_key,omitempty"`
-	CloudEndpoint string `json:"cloud_endpoint,omitempty"` // URL da API (ex: https://api.kofre.dev)
-	KofreToken    string `json:"kofre_token,omitempty"`    // Token da licença Pro
-	TelegramAuth  bool   `json:"telegram_auth"`            // se usa autenticacao remota do Telegram
-	TelegramBot   string `json:"telegram_bot_token,omitempty"`
-	TelegramChat  string `json:"telegram_chat_id,omitempty"`
+	ContaConfigurada bool   `json:"conta_configurada,omitempty"` // Apenas apresentação; não autoriza acesso ao Cloud.
+	ContaID          string `json:"conta_id,omitempty"`
+	PlanoCloud       string `json:"plano_cloud,omitempty"` // Somente apresentação; autorização pertence ao servidor.
+	Tema             string `json:"tema,omitempty"`
+	Mode             string `json:"mode"`          // "local" ou "cloud"
+	VaultPath        string `json:"vault_path"`    // caminho do arquivo local
+	CloudEnabled     bool   `json:"cloud_enabled"` // se sincronizacao com S3 esta ativa
+	S3Bucket         string `json:"s3_bucket"`
+	S3Key            string `json:"s3_key"`
+	S3Region         string `json:"s3_region"`
+	S3Endpoint       string `json:"s3_endpoint"` // para Cloudflare R2 ou MinIO
+	S3AccessKey      string `json:"s3_access_key,omitempty"`
+	S3SecretKey      string `json:"s3_secret_key,omitempty"`
+	CloudEndpoint    string `json:"cloud_endpoint,omitempty"` // URL da API (ex: https://api.kofre.dev)
+	KofreToken       string `json:"kofre_token,omitempty"`    // Token da licença Pro
+	TelegramAuth     bool   `json:"telegram_auth"`            // se usa autenticacao remota do Telegram
+	TelegramBot      string `json:"telegram_bot_token,omitempty"`
+	TelegramChat     string `json:"telegram_chat_id,omitempty"`
 }
 
 // GetCloudEndpoint retorna a URL da API da Nuvem com prioridade: ENV > config.json > Default
