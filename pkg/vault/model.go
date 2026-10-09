@@ -14,6 +14,7 @@ const (
 	CategorySSHKey      Category = "ssh_key"
 	CategoryAuth        Category = "auth"
 	CategoryNote        Category = "note"
+	CategoryDatabase    Category = "database"
 )
 
 var AllCategories = []Category{
@@ -23,6 +24,7 @@ var AllCategories = []Category{
 	CategorySSHKey,
 	CategoryAuth,
 	CategoryNote,
+	CategoryDatabase,
 }
 
 // Field representa um par chave/valor sensivel dentro de uma credencial

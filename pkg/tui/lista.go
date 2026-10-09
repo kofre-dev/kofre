@@ -3,7 +3,7 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 func (m Model) categoriasLista() string {
-	nomes := []string{"Todas", "Senhas", "Tokens", "Certificados", "SSH", "Auth/2FA", "Notas"}
+	nomes := []string{"Todas", "Senhas", "Tokens", "Certificados", "SSH", "Auth/2FA", "Notas", "Bancos de dados"}
 	for i := range nomes {
 		if i == m.selectedCatIdx {
 			nomes[i] = lipgloss.NewStyle().Bold(true).Foreground(m.cores().Destaque).Render("[" + nomes[i] + "]")
@@ -28,6 +28,8 @@ func nomeCategoriaLista(categoria string) string {
 		return "Auth/2FA"
 	case "note":
 		return "Nota"
+	case "database":
+		return "Banco dados"
 	default:
 		return categoria
 	}

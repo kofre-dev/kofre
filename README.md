@@ -84,6 +84,17 @@ kofre import certificado_a1.pfx
 
 ---
 
+## Conexões de bancos de dados
+
+No cadastro de credenciais, escolha **Banco de dados** com `←/→` na categoria.
+Salve tipo, host, porta, nome do banco, usuário, senha e configuração TLS.
+Para SQLite, informe o caminho do arquivo. Use `Ctrl+G` no campo de senha
+para gerar uma senha forte e `Ctrl+S` para salvar.
+
+As conexões ficam no cofre cifrado e podem ser compartilhadas explicitamente
+com sua organização, pelas permissões existentes. O Kofre guarda a configuração;
+não conecta ao servidor de banco. [Detalhes do cadastro e proteção](docs/BANCOS_DE_DADOS.md).
+
 ## 🛡️ Arquitetura de Segurança (Zero-Knowledge)
 
 - **Argon2id (RFC 9106):** Derivação de chave à prova de GPUs com 64 MB de memória e salt de 128-bit gerado criptograficamente.

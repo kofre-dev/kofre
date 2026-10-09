@@ -704,6 +704,8 @@ func cleanHeader(s string) string {
 func normalizeCategory(s string) vault.Category {
 	s = strings.ToLower(strings.TrimSpace(s))
 	switch {
+	case s == "database" || s == "banco de dados" || s == "banco_de_dados":
+		return vault.CategoryDatabase
 	case strings.Contains(s, "token") || strings.Contains(s, "api") || strings.Contains(s, "jwt"):
 		return vault.CategoryToken
 	case strings.Contains(s, "ssh") || strings.Contains(s, "key") || strings.Contains(s, "ppk"):
@@ -756,4 +758,3 @@ func titleFromURL(rawURL string) string {
 	}
 	return ""
 }
-

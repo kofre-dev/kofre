@@ -119,6 +119,8 @@ func renderCategoryBadge(cat string) string {
 		return badgeAuth.Render("AUTH/2FA")
 	case "note":
 		return badgeNote.Render("NOTA")
+	case "database":
+		return badgeToken.Render("BANCO DE DADOS")
 	default:
 		return badgeNote.Render(cat)
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"kofre/pkg/vault"
 	"net/http"
 	"os"
 	"strings"
@@ -88,7 +89,33 @@ func TestClientCloudIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	acl := Acesso{map[string]string{a.Identidade.ID: "gestor"}, map[string]string{equipe: "editor"}}
-	plaintext := []byte(`{"senha":"ficticia-sem-valor"}`)
+	// Exercita o mesmo formato exportado pelo cadastro pessoal: a conexão
+	// completa pertence ao item e não inclui outras credenciais do usuário.
+	cofre := vault.NewManaged()
+	defer cofre.Close()
+	entrada, err := cofre.AddEntry(vault.SecretEntry{Title: "Banco de dados fictício", Category: vault.CategoryDatabase, Fields: []vault.Field{
+		{Name: "Usuario", Value: "usuario-fixture"},
+		{Name: "Segredo", Value: "senha-banco-ficticia", Protected: true},
+		{Name: "Tipo de banco", Value: "PostgreSQL"},
+		{Name: "Host", Value: "db.fixture.invalid"},
+		{Name: "Porta", Value: "5432"},
+		{Name: "Banco de dados", Value: "fixture"},
+		{Name: "TLS", Value: "Validar certificado"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = cofre.AddEntry(vault.SecretEntry{Title: "Privado", Fields: []vault.Field{{Name: "Segredo", Value: "privado-nao-compartilhado", Protected: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	plaintext, err := cofre.ExportarEntrada(entrada.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(plaintext)
+	if !bytes.Contains(plaintext, []byte(`"category":"database"`)) || bytes.Contains(plaintext, []byte("privado-nao-compartilhado")) {
+		t.Fatal("exportação perdeu categoria ou incluiu segredo pessoal")
+	}
 	confirmar := func(string, Pessoa, string) bool { return true }
 	if err = a.Gravar(ctx, org, item, workspace, 1, acl, plaintext, confirmar); err != nil {
 		t.Fatal(err)
@@ -172,7 +199,7 @@ func TestClientCloudIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(recursos)
-	if bytes.Contains(encoded, plaintext) {
+	if bytes.Contains(encoded, plaintext) || bytes.Contains(encoded, []byte("senha-banco-ficticia")) || bytes.Contains(encoded, []byte("db.fixture.invalid")) {
 		t.Fatal("diretório expõe segredo")
 	}
 	if err = a.Request(ctx, "PUT", base+"/proprietario", map[string]string{"novo_proprietario": terceiro.Identidade.ID, "confirmacao": "TRANSFERIR"}, nil); err != nil {

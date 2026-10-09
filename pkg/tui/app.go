@@ -1229,15 +1229,6 @@ func (m Model) notasSelecionadas() bool {
 
 var ordemCamposFormulario = []int{1, 0, 2, 3, 4}
 
-func proximoCampoFormulario(atual, direcao int) int {
-	for pos, indice := range ordemCamposFormulario {
-		if indice == atual {
-			return ordemCamposFormulario[(pos+direcao+len(ordemCamposFormulario))%len(ordemCamposFormulario)]
-		}
-	}
-	return 1
-}
-
 func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
 	m.clearForm()
 	m.isEditing = isEdit
@@ -1248,15 +1239,15 @@ func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
 	// 2: Usuario / Identificador
 	// 3: Segredo / Senha / Token
 	// 4: Notas
-	m.formInputs = make([]input, 5)
+	m.formInputs = make([]input, 11)
 
 	m.formInputs[0] = newInput(false)
-	m.formInputs[0].Placeholder = "Ex: AWS Producao, Banco, GitHub PAT"
+	m.formInputs[0].Placeholder = "Ex: Produção Delphos, GitHub PAT"
 	m.formInputs[0].Prompt = "Titulo: "
 	m.formInputs[0].SetValue(entry.Title)
 
 	m.formInputs[1] = newInput(false)
-	m.formInputs[1].Placeholder = "password, token, certificate, ssh_key, auth, note"
+	m.formInputs[1].Placeholder = "Escolha a categoria com ←/→"
 	m.formInputs[1].Prompt = "Categoria: "
 	catVal := string(entry.Category)
 	if catVal == "" {
@@ -1297,10 +1288,14 @@ func (m *Model) initForm(entry vault.SecretEntry, isEdit bool) {
 	if err := entry.WithNotes(func(value []byte) error { m.formInputs[4].SetBytes(value); return nil }); err != nil {
 		m.err = err
 	}
+	m.initCamposBanco(entry)
 }
 
 func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	if m.selecionarOpcaoFormulario(msg) {
+		return m, nil
+	}
 
 	switch msg.Type {
 	case tea.KeyEsc:
@@ -1311,7 +1306,7 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyTab, tea.KeyDown:
-		m.formFocusIndex = proximoCampoFormulario(m.formFocusIndex, 1)
+		m.formFocusIndex = m.proximoCampoFormulario(m.formFocusIndex, 1)
 		for i := range m.formInputs {
 			if i == m.formFocusIndex {
 				m.formInputs[i].Focus()
@@ -1322,7 +1317,7 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 
 	case tea.KeyShiftTab, tea.KeyUp:
-		m.formFocusIndex = proximoCampoFormulario(m.formFocusIndex, -1)
+		m.formFocusIndex = m.proximoCampoFormulario(m.formFocusIndex, -1)
 		for i := range m.formInputs {
 			if i == m.formFocusIndex {
 				m.formInputs[i].Focus()
@@ -1334,11 +1329,11 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyCtrlS, tea.KeyEnter:
 		// Se for no ultimo campo ou ctrl+s, salva
-		if msg.Type == tea.KeyCtrlS || m.formFocusIndex == len(m.formInputs)-1 {
+		if msg.Type == tea.KeyCtrlS || m.formFocusIndex == 4 {
 			return m.saveForm()
 		}
 		// Caso contrario avanca pro proximo campo
-		m.formFocusIndex = proximoCampoFormulario(m.formFocusIndex, 1)
+		m.formFocusIndex = m.proximoCampoFormulario(m.formFocusIndex, 1)
 		for i := range m.formInputs {
 			if i == m.formFocusIndex {
 				m.formInputs[i].Focus()
@@ -1368,9 +1363,14 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	cat := vault.Category(strings.TrimSpace(m.formInputs[1].Value()))
+	cat := categoriaFormulario(m.formInputs[1].Value())
 	if cat == "" {
 		cat = vault.CategoryPassword
+	}
+	camposConexao, err := m.camposBanco()
+	if err != nil {
+		m.err = err
+		return m, nil
 	}
 
 	userVal := strings.TrimSpace(m.formInputs[2].Value())
@@ -1397,6 +1397,7 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	if len(secretVal) > 0 {
 		fields = append(fields, secretField)
 	}
+	fields = append(fields, camposConexao...)
 
 	if m.isEditing {
 		entry, err := m.vault.GetEntry(m.selectedEntry.ID)
@@ -1431,6 +1432,9 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 		}
 		if !secretUpdated && len(secretVal) > 0 {
 			entry.Fields = append(entry.Fields, secretField)
+		}
+		if cat == vault.CategoryDatabase {
+			atualizarCamposBanco(&entry, camposConexao)
 		}
 		if err := m.vault.UpdateEntry(entry); err != nil {
 			m.err = err
@@ -1831,23 +1835,59 @@ func (m Model) viewForm() string {
 	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(m.cores().Destaque).Render(titleText) + "\n\n")
 
 	w := max(16, m.larguraAcesso()-4)
-	for _, i := range ordemCamposFormulario {
+	ordem := m.ordemFormulario()
+	compacto := m.height < 36 || m.formularioBanco() && m.height < len(ordem)*4+14
+	var blocos []string
+	for _, i := range ordem {
 		campo := m.formInputs[i]
-		if i != 3 && m.height < 36 {
-			b.WriteString(ansi.Truncate(campo.View(), w, "…") + "\n\n")
+		if i == 1 {
+			campo.SetValue(nomeCategoriaFormulario(categoriaFormulario(campo.Value())))
+		}
+		if compacto && (i != 3 || m.formularioBanco()) {
+			blocos = append(blocos, ansi.Truncate(campo.View(), w, "…")+"\n\n")
 			continue
 		}
-		b.WriteString(m.estilos().dimStyle.Render(strings.TrimSuffix(campo.Prompt, ": ")) + "\n")
+		label := m.estilos().dimStyle.Render(strings.TrimSuffix(campo.Prompt, ": ")) + "\n"
 		campo.Prompt = ""
 		cor := m.cores().Borda
 		if i == m.formFocusIndex {
 			cor = m.cores().Destaque
 		}
 		valor := ansi.Truncate(campo.View(), w-4, "…")
-		b.WriteString(lipgloss.NewStyle().Width(w-2).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(cor).Render(valor) + "\n")
+		blocos = append(blocos, label+lipgloss.NewStyle().Width(w-2).Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(cor).Render(valor)+"\n")
 	}
-	b.WriteString("\n" + m.estilos().helpStyle.Render(wrapHelp([]string{"Tab/Shift+Tab Campos", "Ctrl+G Gerar senha"}, w)) + "\n")
-	b.WriteString(m.estilos().helpStyle.Render(wrapHelp([]string{"Ctrl+S Salvar", "Esc Cancelar"}, w)))
+	atalhos := []string{"Tab/Shift+Tab Campos", "←/→ Opções", "Ctrl+G Gerar senha", "Ctrl+S Salvar", "Esc Cancelar"}
+	rodape := "\n" + m.estilos().helpStyle.Render(wrapHelp(atalhos, w))
+	inicio, fim := 0, len(blocos)
+	if m.formularioBanco() && m.height > 0 {
+		reserva := lipgloss.Height(m.renderHeader()) + 1 + 4 + 2 + lipgloss.Height(rodape) + 2
+		if m.notification != "" {
+			reserva += lipgloss.Height(m.estilos().successStyle.Render(m.notification)) + 1
+		} else if m.err != nil {
+			reserva += lipgloss.Height(m.estilos().dangerStyle.Render("Erro: "+m.err.Error())) + 1
+		}
+		linhas := max(2, m.height-reserva)
+		capacidade := max(1, linhas/4)
+		if compacto {
+			capacidade = max(1, linhas/2)
+		}
+		if capacidade < len(blocos) {
+			for pos, indice := range ordem {
+				if indice == m.formFocusIndex {
+					inicio = max(0, pos-capacidade+1)
+					break
+				}
+			}
+			fim = min(len(blocos), inicio+capacidade)
+		}
+	}
+	for _, bloco := range blocos[inicio:fim] {
+		b.WriteString(bloco)
+	}
+	if fim-inicio < len(blocos) {
+		b.WriteString(m.estilos().dimStyle.Render(fmt.Sprintf("Campos %d–%d de %d · Tab para continuar", inicio+1, fim, len(blocos))) + "\n")
+	}
+	b.WriteString(rodape)
 	return lipgloss.NewStyle().Width(m.larguraAcesso()).Padding(1, 2).Border(lipgloss.RoundedBorder()).BorderForeground(m.cores().Destaque).Render(b.String())
 }
 
